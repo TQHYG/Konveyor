@@ -4,8 +4,8 @@ name: Sync upstream
 #
 # Every day (and on demand) it merges upstream's main branch into this fork's
 # main branch, refreshes i18n/zh_CN.json with any new strings, pushes the
-# result, and opens an issue when it needs a human: either because the merge
-# conflicted, or because new strings still need translating.
+# result, and reports anything that needs a human either in the job summary or
+# as an issue (if the repository has Issues enabled).
 #
 # This is safe because the fork does not edit upstream source files except for
 # four clearly marked hook lines in install.sh, so normal merges stay clean.
@@ -74,15 +74,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          title="上游合并冲突，需要手动处理"
-          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -qxF "$title"; then
-            echo "issue already open"
-            exit 0
-          fi
-          cat >/tmp/conflict.md <<'EOF'
-          自动合并 `upstream/main` 时发生冲突，本次没有推送任何内容。
+          cat >>"$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## 上游合并冲突
 
-          请在本地处理：
+          自动合并 `upstream/main` 时发生冲突，本次没有推送任何内容。请在本地处理：
 
           ```sh
           git fetch upstream
@@ -93,14 +88,16 @@ jobs:
 
           冲突通常只出现在 `install.sh` 中标记为 “Konveyor Chinese localization (fork)” 的四处钩子附近。
           EOF
-          gh issue create --title "$title" --body-file /tmp/conflict.md
+          gh issue create \
+            --title "上游合并冲突，需要手动处理" \
+            --body "自动合并 \`upstream/main\` 时发生冲突，本次没有推送任何内容。请在本地运行 \`git fetch upstream && git merge upstream/main\`，解决冲突后推送。" \
+            2>/dev/null || echo "Issues are disabled; see the job summary instead."
 
       - name: Report untranslated strings
         if: steps.merge.outputs.conflict != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 tools/i18n/i18n.py status --languages zh_CN >/tmp/i18n-status.txt
           count=$(python3 - <<'PY'
           import json
           table = json.load(open('i18n/zh_CN.json', encoding='utf-8'))
@@ -109,26 +106,25 @@ jobs:
           )
           echo "untranslated: $count"
           if [ "$count" -eq 0 ]; then
+            echo "## 翻译状态" >> "$GITHUB_STEP_SUMMARY"
+            echo >> "$GITHUB_STEP_SUMMARY"
+            echo "所有字符串均已翻译。" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          title="有 $count 条字符串待翻译"
-          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -qxF "$title"; then
-            echo "issue already open"
-            exit 0
-          fi
-          python3 - "$title" <<'PY'
-          import json, sys
-          title = sys.argv[1]
+          python3 - <<'PY'
+          import json
           table = json.load(open('i18n/zh_CN.json', encoding='utf-8'))
           empty = [k for k, v in table.items() if not k.startswith('$') and k != '_comment' and not v]
-          listing = '\n'.join(f'- `{k}`' for k in empty[:300])
-          more = f'\n\n…以及另外 {len(empty) - 300} 条。' if len(empty) > 300 else ''
-          body = (
-              f'上游更新后共有 **{len(empty)}** 条字符串尚未翻译。\n\n'
-              '编辑 `i18n/zh_CN.json` 填入中文译文即可：键是英文原文，值是译文，留空表示未翻译。\n'
-              '也可以运行 `python3 tools/i18n/i18n.py status --verbose` 查看完整列表。\n\n'
-              f'<details><summary>未翻译的字符串</summary>\n\n{listing}{more}\n\n</details>\n'
-          )
-          open('/tmp/i18n-issue-body.md', 'w', encoding='utf-8').write(body)
+          lines = ['## 待翻译的字符串', '',
+                   f'共有 **{len(empty)}** 条字符串尚未翻译。',
+                   '编辑 `i18n/zh_CN.json` 填入中文译文即可；键是英文原文，值是译文。',
+                   '运行 `python3 tools/i18n/i18n.py status --verbose` 可查看完整列表。', '']
+          lines += [f'- `{k}`' for k in empty[:300]]
+          if len(empty) > 300:
+              lines.append(f'- …以及另外 {len(empty) - 300} 条')
+          with open('/tmp/i18n-report.md', 'w', encoding='utf-8') as handle:
+              handle.write('\n'.join(lines) + '\n')
           PY
-          gh issue create --title "$title" --body-file /tmp/i18n-issue-body.md
+          cat /tmp/i18n-report.md >> "$GITHUB_STEP_SUMMARY"
+          gh issue create --title "有 $count 条字符串待翻译" --body-file /tmp/i18n-report.md \
+            2>/dev/null || echo "Issues are disabled; see the job summary instead."
