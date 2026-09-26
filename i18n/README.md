@@ -129,3 +129,6 @@ python3 tools/i18n/i18n.py status --verbose             # 列出未翻译项
 
 > 仓库默认关闭了 Issues。想收通知请在 **Settings → Features** 勾选
 > **Issues**；否则在 **Actions → Sync upstream** 查看每次运行顶部的 Summary。
+>
+> 需要立即打一个源码包时，在 Actions 页面手动运行本工作流并勾选
+> **force_release** 即可。

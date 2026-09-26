@@ -59,9 +59,11 @@ for argument in "$@"; do
     esac
 done
 
-[[ -f $I18N_JSON ]] || die "找不到语言文件: $I18N_JSON"
 [[ -f $I18N_TOOL ]] || die "找不到翻译工具: $I18N_TOOL"
 command -v python3 >/dev/null 2>&1 || die "需要 python3 来应用翻译"
+if [[ ! -f $I18N_JSON ]]; then
+    warn "找不到语言文件 $I18N_JSON，将按原版安装（不翻译）"
+fi
 INSTALLER="${KONVEYOR_ZH_INSTALLER:-$SOURCE_DIR/install.sh}"
 [[ -x $INSTALLER ]] || die "找不到可执行的 install.sh"
 
@@ -124,7 +126,7 @@ update_source
 # shellcheck source=/dev/null
 source "$SOURCE_DIR/i18n/hook.sh"
 konveyor_i18n_apply
-say "安装中文版 Konveyor"
+say "安装 Konveyor"
 "$INSTALLER" --no-pull "${INSTALL_ARGS[@]}"
 
 install_update_hooks
