@@ -531,7 +531,11 @@ def cmd_extract(args):
 
 
 def cmd_status(args):
-    languages = args.languages or sorted(p.stem for p in I18N_DIR.glob("*.json"))
+    if args.languages:
+        languages = args.languages
+    else:
+        skip = {"languages", "schema"}
+        languages = sorted(p.stem for p in I18N_DIR.glob("*.json") if p.stem not in skip)
     if not languages:
         print("no dictionaries found in i18n/")
         return 1

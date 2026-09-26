@@ -47,8 +47,8 @@ python3 tools/i18n/i18n.py revert
 
 ```sh
 python3 tools/i18n/i18n.py extract --lang zh_CN
-python3 tools/i18n/i18n.py status  --lang zh_CN            # 概览
-python3 tools/i18n/i18n.py status  --lang zh_CN --verbose  # 列出未翻译项
+python3 tools/i18n/i18n.py status                       # 概览
+python3 tools/i18n/i18n.py status --verbose             # 列出未翻译项
 ```
 
 然后编辑 `i18n/zh_CN.json`，把空字符串填成中文即可：
@@ -100,7 +100,12 @@ python3 tools/i18n/i18n.py status  --lang zh_CN --verbose  # 列出未翻译项
 1. 把 `DevL0rd/Konveyor` 的 `main` 合并进本复刻的 `main`；
 2. 运行 `extract` 补充新词条；
 3. 提交并推送；
-4. 如果合并冲突，或出现未翻译字符串，就开一个 Issue 提醒你。
+4. 如果合并冲突，或出现未翻译字符串，就把结果写到本次运行的 Summary，
+   并在仓库启用了 Issues 时开一个 Issue 提醒你。
+
+> 提示：本复刻默认关闭了 Issues。如果想收到 Issue 通知，请在仓库
+> **Settings → Features** 里勾选 **Issues**；否则请在
+> **Actions → Sync upstream** 里查看每次运行顶部的 Summary。
 
 因为我们对上游源码的改动仅限于 `install.sh` 中四处很短的钩子，正常合并
 不会冲突；万一冲突，工作流会保留现场并开 Issue，你在本地解决即可。
