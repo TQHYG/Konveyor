@@ -108,7 +108,7 @@ jobs:
           TAG: zh-${{ github.run_number }}
           SHA: ${{ steps.push.outputs.sha }}
         run: |
-          gh release delete "$TAG" --yes 2>/dev/null || true
+          gh release delete "$TAG" --yes --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
           cat >/tmp/release-notes.md <<'EOF'
           自动同步上游 [DevL0rd/Konveyor](https://github.com/DevL0rd/Konveyor) 并刷新中文词条。
 
@@ -122,6 +122,7 @@ jobs:
           （也可以直接在本复刻里执行 `git clone --recurse-submodules` 后运行 `./install-zh.sh`。）
           EOF
           gh release create "$TAG" "/tmp/konveyor-zh-${TAG}.tar.gz" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "中文版源码 $TAG" \
             --notes-file /tmp/release-notes.md \
             --target main \
@@ -147,6 +148,7 @@ jobs:
           本复刻对上游文件的改动只有 `.gitmodules` 一行，冲突很少；若出现，优先保留我们的子模块地址与新增文件。
           EOF
           gh issue create \
+            --repo "$GITHUB_REPOSITORY" \
             --title "上游合并冲突，需要手动处理" \
             --body "自动合并 upstream/main 时发生冲突，本次没有推送任何内容。请在本地运行 git fetch upstream && git merge upstream/main，解决冲突后推送。" \
             2>/dev/null || echo "Issues are disabled; see the job summary instead."
@@ -186,5 +188,10 @@ jobs:
               handle.write('\n'.join(lines) + '\n')
           PY
           cat /tmp/i18n-report.md >>"$GITHUB_STEP_SUMMARY"
-          gh issue create --title "有 $count 条字符串待翻译" --body-file /tmp/i18n-report.md \
+          title="有 $count 条字符串待翻译"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 --json title --jq '.[].title' 2>/dev/null | grep -qxF "$title"; then
+            echo "issue already open"
+            exit 0
+          fi
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file /tmp/i18n-report.md \
             2>/dev/null || echo "Issues are disabled; see the job summary instead."
