@@ -16,6 +16,11 @@ on:
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
+    inputs:
+      force_release:
+        description: "即使没有变化也打包并发布一个源码 Release"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -84,7 +89,7 @@ jobs:
           echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Package the source
-        if: steps.merge.outputs.conflict != 'true' && steps.i18n.outputs.changed == 'true'
+        if: steps.merge.outputs.conflict != 'true' && (steps.i18n.outputs.changed == 'true' || inputs.force_release)
         env:
           TAG: zh-${{ github.run_number }}
         run: |
@@ -97,7 +102,7 @@ jobs:
         id: package
 
       - name: Publish a release
-        if: steps.merge.outputs.conflict != 'true' && steps.i18n.outputs.changed == 'true'
+        if: steps.merge.outputs.conflict != 'true' && (steps.i18n.outputs.changed == 'true' || inputs.force_release)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: zh-${{ github.run_number }}
