@@ -1,0 +1,134 @@
+name: Sync upstream
+
+# Keeps this localization fork in step with DevL0rd/Konveyor.
+#
+# Every day (and on demand) it merges upstream's main branch into this fork's
+# main branch, refreshes i18n/zh_CN.json with any new strings, pushes the
+# result, and opens an issue when it needs a human: either because the merge
+# conflicted, or because new strings still need translating.
+#
+# This is safe because the fork does not edit upstream source files except for
+# four clearly marked hook lines in install.sh, so normal merges stay clean.
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/DevL0rd/Konveyor.git 2>/dev/null || true
+          git fetch --tags upstream
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge --no-edit upstream/main; then
+            git merge --abort
+            echo "conflict=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Refresh the translation dictionary
+        if: steps.merge.outputs.conflict != 'true'
+        run: |
+          python3 tools/i18n/i18n.py extract --lang zh_CN | tee /tmp/i18n-extract.txt
+          python3 tools/i18n/i18n.py status --languages zh_CN | tee /tmp/i18n-status.txt
+
+      - name: Commit and push
+        if: steps.merge.outputs.conflict != 'true'
+        run: |
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "Sync upstream and refresh zh_CN translations"
+          fi
+          git push
+
+      - name: Report a merge conflict
+        if: steps.merge.outputs.conflict == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="上游合并冲突，需要手动处理"
+          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -qxF "$title"; then
+            echo "issue already open"
+            exit 0
+          fi
+          cat >/tmp/conflict.md <<'EOF'
+          自动合并 `upstream/main` 时发生冲突，本次没有推送任何内容。
+
+          请在本地处理：
+
+          ```sh
+          git fetch upstream
+          git merge upstream/main
+          # 解决冲突后
+          git push
+          ```
+
+          冲突通常只出现在 `install.sh` 中标记为 “Konveyor Chinese localization (fork)” 的四处钩子附近。
+          EOF
+          gh issue create --title "$title" --body-file /tmp/conflict.md
+
+      - name: Report untranslated strings
+        if: steps.merge.outputs.conflict != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 tools/i18n/i18n.py status --languages zh_CN >/tmp/i18n-status.txt
+          count=$(python3 - <<'PY'
+          import json
+          table = json.load(open('i18n/zh_CN.json', encoding='utf-8'))
+          print(sum(1 for k, v in table.items() if not k.startswith('$') and k != '_comment' and not v))
+          PY
+          )
+          echo "untranslated: $count"
+          if [ "$count" -eq 0 ]; then
+            exit 0
+          fi
+          title="有 $count 条字符串待翻译"
+          if gh issue list --state open --limit 100 --json title --jq '.[].title' | grep -qxF "$title"; then
+            echo "issue already open"
+            exit 0
+          fi
+          python3 - "$title" <<'PY'
+          import json, sys
+          title = sys.argv[1]
+          table = json.load(open('i18n/zh_CN.json', encoding='utf-8'))
+          empty = [k for k, v in table.items() if not k.startswith('$') and k != '_comment' and not v]
+          listing = '\n'.join(f'- `{k}`' for k in empty[:300])
+          more = f'\n\n…以及另外 {len(empty) - 300} 条。' if len(empty) > 300 else ''
+          body = (
+              f'上游更新后共有 **{len(empty)}** 条字符串尚未翻译。\n\n'
+              '编辑 `i18n/zh_CN.json` 填入中文译文即可：键是英文原文，值是译文，留空表示未翻译。\n'
+              '也可以运行 `python3 tools/i18n/i18n.py status --verbose` 查看完整列表。\n\n'
+              f'<details><summary>未翻译的字符串</summary>\n\n{listing}{more}\n\n</details>\n'
+          )
+          open('/tmp/i18n-issue-body.md', 'w', encoding='utf-8').write(body)
+          PY
+          gh issue create --title "$title" --body-file /tmp/i18n-issue-body.md

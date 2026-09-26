@@ -1,0 +1,10 @@
+{
+    "default": "zh_CN",
+    "languages": [
+        {
+            "code": "zh_CN",
+            "name": "简体中文",
+            "file": "zh_CN.json"
+        }
+    ]
+}

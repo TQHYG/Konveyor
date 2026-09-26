@@ -1,0 +1,17 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Konveyor translation dictionary",
+    "description": "A flat map of English source strings to translated strings. Keys must match the source exactly, including leading and trailing spaces. An empty value means the string is not translated yet.",
+    "type": "object",
+    "properties": {
+        "$schema": {
+            "type": "string"
+        },
+        "_comment": {
+            "type": "string"
+        }
+    },
+    "additionalProperties": {
+        "type": "string"
+    }
+}

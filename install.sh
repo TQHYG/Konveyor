@@ -7,6 +7,13 @@ INSTALL_SUPPORT="${KONVEYOR_INSTALL_SUPPORT:-$SOURCE_DIR/extras/packaging}"
 source "$INSTALL_SUPPORT/common.sh"
 source "$INSTALL_SUPPORT/updates.sh"
 
+# Konveyor Chinese localization (fork). Applies i18n/<lang>.json to the working
+# tree before building and reverts it on exit; see i18n/README.md.
+if [[ -f "$SOURCE_DIR/i18n/hook.sh" ]]; then
+    # shellcheck source=/dev/null
+    source "$SOURCE_DIR/i18n/hook.sh"
+fi
+
 BUILD_DIR="${KONVEYOR_BUILD_DIR:-$SOURCE_DIR/build-release}"
 SKIP_DEPS=false
 SKIP_PULL=false
@@ -66,6 +73,7 @@ install_dependencies() {
 
 build() {
     say "Building (this takes a minute)"
+    declare -F konveyor_i18n_apply >/dev/null && konveyor_i18n_apply
     local system_paths=OFF
     [[ $KONVEYOR_PREFIX == /usr ]] && system_paths=ON
     as_owner "${KONVEYOR_BUILD_ENV[@]}" cmake -S "$SOURCE_DIR" -B "$BUILD_DIR" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$KONVEYOR_PREFIX" \
@@ -201,6 +209,7 @@ activate() {
 }
 
 finish_update() {
+    declare -F konveyor_i18n_apply >/dev/null && konveyor_i18n_apply
     KONVEYOR_PLUGIN_DIR=$(konveyor_plugin_dir)
     PLUGIN_ID=$(<"$KONVEYOR_STATE_DIR/plugin-id")
     if grep -qx "widgets=false" "$OPTIONS_FILE" 2>/dev/null; then
@@ -231,6 +240,7 @@ system_update() {
     record_fingerprint
     register_updates
     remove_previous_plugin_files
+    declare -F konveyor_i18n_revert >/dev/null && konveyor_i18n_revert
     if owner_session_running; then
         as_owner env KONVEYOR_SOURCE_DIR="$SOURCE_DIR" KONVEYOR_INSTALL_SUPPORT="$KONVEYOR_UPDATER_DIR" \
             "$KONVEYOR_UPDATER_DIR/install" --finish-update
