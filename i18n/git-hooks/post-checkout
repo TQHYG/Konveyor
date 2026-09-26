@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# Git hook used on Konveyor's automatic-rebuild clone
+# (~/.local/share/konveyor/source).
+#
+# install-zh.sh points that clone's core.hooksPath here, so every time the
+# clone is refreshed (git checkout/merge) the Chinese translations are applied
+# again. This is how system updates keep rebuilding a Chinese Konveyor without
+# patching install.sh.
+#
+# It is intentionally forgiving: any problem leaves the tree in English and
+# exits 0 so git operations never fail because of localization.
+
+set -uo pipefail
+
+repo="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+[[ -n ${repo:-} ]] || exit 0
+
+tool="$repo/tools/i18n/i18n.py"
+lang="${KONVEYOR_I18N_LANG:-zh_CN}"
+
+[[ -f $tool && -f "$repo/i18n/$lang.json" ]] || exit 0
+command -v python3 >/dev/null 2>&1 || exit 0
+
+python3 "$tool" --repo "$repo" revert >/dev/null 2>&1 || true
+python3 "$tool" --repo "$repo" apply --lang "$lang" >/dev/null 2>&1 || true
+exit 0

@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# See post-checkout: merge/fast-forward also refreshes the working tree.
+exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/post-checkout" "$@"

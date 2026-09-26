@@ -1,5 +1,7 @@
 <a id="top"></a>
 
+> 🇨🇳 **简体中文**：本复刻提供中文界面，安装方式见 [README.zh-CN.md](README.zh-CN.md)（`./install-zh.sh`）。
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/media/banner-dark.svg">
