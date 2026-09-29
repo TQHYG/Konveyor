@@ -33,6 +33,8 @@ You get gaps, borders, a focus ring, tab indicators, preset widths, centering mo
 
 The default config ships a `portrait` monitor profile for screens taller than they are wide: columns fill the width and stack two windows, so Mod+Left/Right flips between full-width pages and Mod+Up/Down moves between the rows, then on to the workspace above or below.
 
+A column stretches to the full width while it is the only one on its workspace, like `expand-column-to-available-width` without the keypress, and goes back to its own width as soon as another column opens. Apps that can't be resized keep their own size. `always-expand-single-column false` in `layout` turns this off. It combines with `always-center-single-column` and works globally and inside `monitor-profile` and `output` layout blocks.
+
 Tiled windows respect application size limits by default. Add `force-resizable true` to a window rule when a specific app should ignore those limits and fill its grid cell. <kbd>Meta</kbd> + <kbd>Alt</kbd> + <kbd>R</kbd> toggles this for the focused app and stores the override in `~/.config/konveyor/force-resizable.kdl`. When force resizing is off, Konveyor never resizes a window that the application marks non-resizable. The app remains free to change its own resolution, and Konveyor updates the grid around its new size.
 
 ```kdl
@@ -97,7 +99,7 @@ gestures {
 
 The window swipes move one step for every stretch of finger travel, so a long swipe carries the window several columns or workspaces; the window goes the way your fingers go. On a touchscreen the gesture moves the window under your fingers; on a touchpad it moves the focused window. If `swipe-fingers` and `window-swipe-fingers` are the same, the row swipes win.
 
-Each tap option takes `"cycle-width"`, `"kontrol-panel"`, `"toggle-overview"` or `"off"`. A tap is all fingers down and lifted within 250 ms without sliding; anything that turns into a swipe or pinch is not a tap. On a touchscreen a width tap acts on the column under your fingers; on a touchpad it acts on the focused column. The Kontrol Panel tap runs `portal-launcher toggle`, so it needs the Konveyor widgets installed.
+Each tap option takes `"cycle-width"`, `"kontrol-panel"`, `"toggle-overview"` or `"off"`. A tap is all fingers down and lifted within 250 ms without sliding; anything that turns into a swipe or pinch is not a tap. On a touchscreen a width tap acts on the column under your fingers; on a touchpad it acts on the focused column. The Kontrol Panel tap runs `portal-launcher toggle`, so it needs the Konveyor widgets installed, but not the Kontrol Panel button in a panel.
 
 KDE and libinput have no multi-finger tap gesture, so Konveyor reads the touchpad's finger contacts from its `/dev/input/event*` node. Your user needs read access to it (membership in the `input` group); without it Konveyor logs `touchpad taps are unavailable` to the KWin journal and touchpad taps do nothing. libinput's tap-to-click turns a 3-finger tap into a middle click (a right click with the left-middle-right button map). While `three-finger-tap` is not `"off"`, Konveyor takes that click after a 3-finger touch, so apps no longer get a middle click from it; set `three-finger-tap "off"` to get the middle click back. Konveyor never changes libinput's own touchpad settings.
 
