@@ -1,5 +1,6 @@
 #include "layout/engine/engineprivate.h"
 
+#include "config/log.h"
 #include "layout/common/sizechange.h"
 
 #include <algorithm>
@@ -23,32 +24,19 @@ std::optional<QString> actionProperty(const Config::Action &action, const QStrin
     return std::nullopt;
 }
 
-ActionResult actionError(const QString &message)
-{
-    return {false, message};
-}
-
 std::optional<WindowId> actionWindowId(const Config::Action &action, std::optional<WindowId> fallback)
 {
     auto text = actionProperty(action, QStringLiteral("id"));
     if (!text) {
         text = actionProperty(action, QStringLiteral("window-id"));
     }
-    if (!text) {
-        return fallback;
-    }
-    const auto parsed = parseIndex(*text);
-    return parsed ? std::optional<WindowId>(*parsed) : fallback;
+    return text ? std::optional<WindowId>(*parseIndex(*text)) : fallback;
 }
 
 bool actionFlag(const Config::Action &action, const QString &name, bool fallback)
 {
     const auto text = actionProperty(action, name);
-    if (!text) {
-        return fallback;
-    }
-    const auto parsed = parseBool(*text);
-    return parsed ? *parsed : fallback;
+    return text ? *parseBool(*text) : fallback;
 }
 
 void addEngineAction(ActionTable &table, const char *name, ActionHandler handler)
@@ -203,6 +191,16 @@ void registerFocusActions(ActionTable &table)
     registerColumnFocusActions(table);
     addEngineAction(table, "focus-column",
         [](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) { return focusByIndex(d, action, false); });
+    addEngineAction(table, "focus-taskbar-item", [](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) {
+        const auto index = parseIndex(actionArgument(action, 0));
+        if (!index) {
+            return actionError(index.error());
+        }
+        if (d.hooks.focusTaskbarItem) {
+            d.hooks.focusTaskbarItem(*index);
+        }
+        return ActionResult();
+    });
     addEngineAction(table, "focus-window-in-column",
         [](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) { return focusByIndex(d, action, true); });
     addEngineAction(table, "focus-window-previous",
@@ -239,19 +237,49 @@ void registerFocusActions(ActionTable &table)
 namespace
 {
 
+using ColumnTarget = std::size_t (*)(std::size_t from, std::size_t count);
+
+void addColumnMoveAction(ActionTable &table, const char *name, void (*fn)(Workspace &), ColumnTarget to)
+{
+    addEngineAction(table, name, [fn, to](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) {
+        const std::optional<WindowId> window = actionWindowId(action, std::nullopt);
+        Workspace *workspace = d.workspaceForTarget(window);
+        if (!workspace) {
+            return ActionResult();
+        }
+        if (!window) {
+            fn(*workspace);
+            return ActionResult();
+        }
+        if (const auto from = workspace->tiledColumnIndex(*window)) {
+            const std::size_t count = workspace->scrolling().columns().size();
+            workspace->moveColumnToIndex(to(*from, count) + 1, window);
+        }
+        return ActionResult();
+    });
+}
+
 void registerSimpleMoveActions(ActionTable &table)
 {
-    addWorkspaceAction(table, "move-column-left", +[](Workspace &ws) { ws.moveLeft(); });
-    addWorkspaceAction(table, "move-column-right", +[](Workspace &ws) { ws.moveRight(); });
-    addWorkspaceAction(table, "move-column-to-first", +[](Workspace &ws) { ws.moveColumnToFirst(); });
-    addWorkspaceAction(table, "move-column-to-last", +[](Workspace &ws) { ws.moveColumnToLast(); });
+    addColumnMoveAction(
+        table, "move-column-left", +[](Workspace &ws) { ws.moveLeft(); },
+        +[](std::size_t from, std::size_t) { return from > 0 ? from - 1 : 0; });
+    addColumnMoveAction(
+        table, "move-column-right", +[](Workspace &ws) { ws.moveRight(); }, +[](std::size_t from, std::size_t) { return from + 1; });
+    addColumnMoveAction(
+        table, "move-column-to-first", +[](Workspace &ws) { ws.moveColumnToFirst(); },
+        +[](std::size_t, std::size_t) -> std::size_t { return 0; });
+    addColumnMoveAction(
+        table, "move-column-to-last", +[](Workspace &ws) { ws.moveColumnToLast(); },
+        +[](std::size_t, std::size_t count) { return count - 1; });
     addWorkspaceAction(table, "move-window-down", +[](Workspace &ws) { ws.moveDown(); });
     addWorkspaceAction(table, "move-window-up", +[](Workspace &ws) { ws.moveUp(); });
     addWorkspaceAction(table, "consume-window-into-column", +[](Workspace &ws) { ws.consumeIntoColumn(); });
     addWorkspaceAction(table, "expel-window-from-column", +[](Workspace &ws) { ws.expelFromColumn(); });
     addWorkspaceAction(table, "swap-window-left", +[](Workspace &ws) { ws.swapWindowInDirection(ScrollDirection::Left); });
     addWorkspaceAction(table, "swap-window-right", +[](Workspace &ws) { ws.swapWindowInDirection(ScrollDirection::Right); });
-    addWorkspaceAction(table, "toggle-column-tabbed-display", +[](Workspace &ws) { ws.toggleColumnTabbedDisplay(); });
+    addTargetAction(
+        table, "toggle-column-tabbed-display", +[](Workspace &ws, std::optional<WindowId> id) { ws.toggleColumnTabbedDisplay(id); });
     addWorkspaceAction(table, "center-column", +[](Workspace &ws) { ws.centerColumn(); });
     addWorkspaceAction(table, "center-visible-columns", +[](Workspace &ws) { ws.centerVisibleColumns(); });
     addTargetAction(table, "center-window", +[](Workspace &ws, std::optional<WindowId> id) { ws.centerWindow(id); });
@@ -270,7 +298,7 @@ ActionResult moveColumnOrMonitor(Engine::Private &d, const QString &direction)
         return {};
     }
     if (const auto idx = d.monitorInDirection(direction)) {
-        d.moveColumnToMonitor(*idx, true);
+        d.moveColumnToMonitor(*idx, true, std::nullopt);
     }
     return {};
 }
@@ -280,23 +308,25 @@ ActionResult moveColumnOrMonitor(Engine::Private &d, const QString &direction)
 void registerMoveActions(ActionTable &table)
 {
     registerSimpleMoveActions(table);
-    addEngineAction(table, "move-column-to-index", [](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) {
+    addEngineAction(table, "move-column-to-index", [](Engine::Private &d, const Config::Action &action, std::optional<WindowId> target) {
         const auto index = parseIndex(actionArgument(action, 0));
         if (!index) {
             return actionError(index.error());
         }
-        if (Workspace *workspace = d.activeWorkspace()) {
-            workspace->moveColumnToIndex(static_cast<std::size_t>(*index));
+        const std::optional<WindowId> window = actionWindowId(action, target);
+        if (Workspace *workspace = d.workspaceForTarget(window)) {
+            workspace->moveColumnToIndex(static_cast<std::size_t>(*index), window);
         }
         return ActionResult();
     });
-    addEngineAction(table, "set-column-display", [](Engine::Private &d, const Config::Action &action, std::optional<WindowId>) {
+    addEngineAction(table, "set-column-display", [](Engine::Private &d, const Config::Action &action, std::optional<WindowId> target) {
         const auto display = parseColumnDisplay(actionArgument(action, 0));
         if (!display) {
             return actionError(display.error());
         }
-        if (Workspace *workspace = d.activeWorkspace()) {
-            workspace->setColumnDisplay(*display);
+        const std::optional<WindowId> window = actionWindowId(action, target);
+        if (Workspace *workspace = d.workspaceForTarget(window)) {
+            workspace->setColumnDisplay(*display, window);
         }
         return ActionResult();
     });
@@ -306,6 +336,26 @@ void registerMoveActions(ActionTable &table)
         table, "move-column-right-or-to-monitor-right", [](Engine::Private &d, const Config::Action &, std::optional<WindowId>) {
             return moveColumnOrMonitor(d, QStringLiteral("right"));
         });
+}
+
+namespace
+{
+
+std::optional<QString> invalidProperty(const Config::Action &action)
+{
+    for (const auto &[key, value] : action.properties) {
+        const bool isWindow = key == QLatin1String("id") || key == QLatin1String("window-id");
+        const bool isFlag = key == QLatin1String("focus") || key == QLatin1String("from-native");
+        if (isWindow && !parseIndex(value)) {
+            return parseIndex(value).error();
+        }
+        if (isFlag && !parseBool(value)) {
+            return parseBool(value).error();
+        }
+    }
+    return std::nullopt;
+}
+
 }
 
 const ActionTable &actionTable()
@@ -331,8 +381,15 @@ ActionResult Engine::perform(const Config::Action &action, std::optional<WindowI
     if (handler == table.constEnd()) {
         return actionError(QStringLiteral("unknown action: %1").arg(action.name));
     }
-    d->layoutFocused = true;
+    if (const auto invalid = invalidProperty(action)) {
+        return actionError(*invalid);
+    }
+    qCInfo(lcKonveyor) << "konveyor: action" << action.name << action.arguments << "target" << (target ? static_cast<qint64>(*target) : -1);
+    d->takeLayoutFocus();
     const ActionResult result = (*handler)(*d, action, target);
+    if (!result.ok) {
+        qCInfo(lcKonveyor) << "konveyor: action" << action.name << "failed:" << result.error;
+    }
     d->refresh();
     return result;
 }

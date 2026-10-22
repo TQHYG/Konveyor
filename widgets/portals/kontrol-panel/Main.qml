@@ -7,7 +7,6 @@ Item {
     required property var config
 
     property bool open: false
-    readonly property bool openedByKey: true
     property var pendingPins: []
     signal pinsRequested()
     property string requestedPage: ""
@@ -49,13 +48,15 @@ Item {
 
     onOpenChanged: service.setOpen(open)
 
-    Component.onCompleted: {
+    function openPageOnStart() {
         const page = config.openPageOnStart
         if (page !== "" && service.konveyorRunning()) {
             config.openPageOnStart = ""
             handleRequest(page)
         }
     }
+
+    Component.onCompleted: openPageOnStart()
 
     Connections {
         target: root.service
@@ -74,6 +75,9 @@ Item {
         }
         function onConfigureRequested() {
             root.configure()
+        }
+        function onKonveyorStarted() {
+            root.openPageOnStart()
         }
     }
 

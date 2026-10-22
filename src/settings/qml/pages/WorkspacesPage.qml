@@ -12,6 +12,7 @@ SettingsPage {
     readonly property var named: SettingsStore.revision >= 0 ? SettingsStore.children("", "workspace") : []
     readonly property var names: named.map(entry => String((entry.node.args || [])[0] || ""))
     readonly property var layoutValues: SettingsStore.revision >= 0 ? SettingsStore.scope("layout") : ({})
+    readonly property int fixedCount: Number(layoutValues["fixed-workspace-count"] || 0)
     property string renamePath
 
     title: "Workspaces"
@@ -21,8 +22,46 @@ SettingsPage {
             const child = (entry.node.children || []).find(node => node.name === "open-on-output");
             return child ? String(child.args[0]) : "";
         })
+        fixedCount: page.fixedCount
         emptyAbove: page.layoutValues["empty-workspace-above-first"] === true
         backAndForth: SettingsStore.values["input/workspace-auto-back-and-forth"] === true
+    }
+
+    CardHeader {
+        title: "Workspace count"
+    }
+
+    Card {
+        SwitchRow {
+            label: "Use a fixed number of workspaces"
+            description: "Keep numbered workspaces on every monitor, including empty ones. Konveyor sets KDE's desktop count to match."
+            iconName: "virtual-desktops"
+            resetPaths: ["layout/fixed-workspace-count"]
+            isOn: page.fixedCount > 0
+            onSwitched: on => SettingsStore.setValue("layout/fixed-workspace-count", [on ? 4 : 0])
+        }
+
+        SliderRow {
+            visible: page.fixedCount > 0
+            wideControl: true
+            label: "Workspaces per monitor"
+            description: "Reducing the count combines extra unnamed workspaces. Named workspaces set a minimum, so every name is kept."
+            iconName: "view-list-tree"
+            resetPaths: ["layout/fixed-workspace-count"]
+            from: 1
+            to: 20
+            value: page.fixedCount || 4
+            onEdited: value => SettingsStore.setValue("layout/fixed-workspace-count", [Math.round(value)])
+        }
+
+        SwitchRow {
+            label: "Lay out KDE desktops horizontally"
+            description: "Place KDE's virtual desktops side by side, so pagers on a top or bottom panel stay thin. Konveyor's workspaces still move up and down."
+            iconName: "view-split-left-right"
+            resetPaths: ["layout/horizontal-desktops"]
+            isOn: page.layoutValues["horizontal-desktops"] === true
+            onSwitched: on => SettingsStore.setFlag("layout/horizontal-desktops", on)
+        }
     }
 
     CardHeader {
@@ -40,6 +79,7 @@ SettingsPage {
         }
 
         SwitchRow {
+            enabled: page.fixedCount === 0
             label: "Keep an empty workspace above the first"
             description: "There's always a blank workspace at the top to start something new, as well as at the bottom."
             iconName: "list-add"

@@ -13,12 +13,22 @@ Kirigami.FormLayout {
     property alias cfg_cardWidth: widthBox.value
     property alias cfg_cardHeight: heightBox.value
     property alias cfg_dimStrength: dimSlider.value
+    property alias cfg_useTaskbarWhileOpen: useTaskbarWhileOpen.checked
+    property string cfg_backdropAnimation
     property string cfg_defaultPage
     property alias cfg_tileSize: tileSize.value
     property alias cfg_showRecentApps: showRecentApps.checked
     property alias cfg_showRecentFiles: showRecentFiles.checked
     property alias cfg_showGames: showGames.checked
     property alias cfg_showFriends: showFriends.checked
+    property alias cfg_showHomeDate: showHomeDate.checked
+    property alias cfg_showTopBarFriends: showTopBarFriends.checked
+    property alias cfg_showTopBarClock: showTopBarClock.checked
+    property alias cfg_showTopBarSettings: showTopBarSettings.checked
+    property alias cfg_showTopBarPower: showTopBarPower.checked
+    property alias cfg_showSidebarFriends: showSidebarFriends.checked
+    property alias cfg_showSidebarSystem: showSidebarSystem.checked
+    property alias cfg_showSidebarSettings: showSidebarSettings.checked
     property alias cfg_searchFiles: searchFiles.checked
     property alias cfg_searchSettings: searchSettings.checked
     property alias cfg_searchCalculator: searchCalculator.checked
@@ -63,6 +73,51 @@ Kirigami.FormLayout {
     property bool portal: Plasmoid.metaData.pluginId === "org.devl0rd.portal"
     readonly property string defaultIcon: "view-app-grid-symbolic"
     property string cfg_searchOrder
+    property string title
+    property var cfg_appsCategoryDefault
+    property var cfg_appsSortDefault
+    property var cfg_appsViewDefault
+    property var cfg_appViewModeDefault
+    property var cfg_cardHeightDefault
+    property var cfg_cardWidthDefault
+    property var cfg_defaultCategoryDefault
+    property var cfg_defaultPageDefault
+    property var cfg_defaultSortDefault
+    property var cfg_dimStrengthDefault
+    property var cfg_gameCardSizeDefault
+    property var cfg_gameCardWidthDefault
+    property var cfg_gamesSortDefault
+    property var cfg_gamesViewDefault
+    property var cfg_gamesViewModeDefault
+    property var cfg_iconDefault
+    property var cfg_labelDefault
+    property var cfg_learnedRankingDefault
+    property var cfg_migratedFromPortalDefault
+    property var cfg_popupHeightDefault
+    property var cfg_popupWidthDefault
+    property var cfg_searchCalculatorDefault
+    property var cfg_searchCommandsDefault
+    property var cfg_searchFilesDefault
+    property var cfg_searchOrderDefault
+    property var cfg_searchPackagesDefault
+    property var cfg_searchSettingsDefault
+    property var cfg_searchWebDefault
+    property var cfg_searchWindowsDefault
+    property var cfg_showFriendsDefault
+    property var cfg_showFriendsBadgeDefault
+    property var cfg_showGamesDefault
+    property var cfg_showHomeDateDefault
+    property var cfg_showLabelDefault
+    property var cfg_showRecentAppsDefault
+    property var cfg_showRecentFilesDefault
+    property var cfg_showSidebarFriendsDefault
+    property var cfg_showSidebarSettingsDefault
+    property var cfg_showSidebarSystemDefault
+    property var cfg_showTopBarClockDefault
+    property var cfg_showTopBarFriendsDefault
+    property var cfg_showTopBarPowerDefault
+    property var cfg_showTopBarSettingsDefault
+    property var cfg_tileSizeDefault
 
     readonly property var groupLabels: ({
         answer: i18n("Answers (calculator, units)"),
@@ -154,6 +209,24 @@ Kirigami.FormLayout {
         QQC2.Slider { id: dimSlider; from: 0; to: 0.9; stepSize: 0.05 }
         QQC2.Label { text: Math.round(dimSlider.value * 100) + "%" }
     }
+    QQC2.CheckBox {
+        id: useTaskbarWhileOpen
+        visible: !form.portal
+        text: i18n("Use taskbar while Kontrol Panel is open")
+    }
+    QQC2.ComboBox {
+        id: backdropAnimation
+        visible: !form.portal
+        Kirigami.FormData.label: i18n("Dimming appears with:")
+        textRole: "text"
+        valueRole: "value"
+        model: [
+            { text: i18n("Scale and fade"), value: "scale" },
+            { text: i18n("Fade only"), value: "fade" }
+        ]
+        Component.onCompleted: currentIndex = Math.max(0, indexOfValue(form.cfg_backdropAnimation))
+        onActivated: form.cfg_backdropAnimation = currentValue
+    }
     QQC2.SpinBox {
         id: tileSize
         Kirigami.FormData.label: i18n("App icon size:")
@@ -180,8 +253,23 @@ Kirigami.FormLayout {
 
     QQC2.CheckBox { id: showRecentApps; Kirigami.FormData.label: i18n("Home shows:"); text: i18n("Recently used apps") }
     QQC2.CheckBox { id: showRecentFiles; text: i18n("Recent files") }
+    QQC2.CheckBox { id: showHomeDate; visible: !form.portal; text: i18n("Today's date") }
     QQC2.CheckBox { id: showGames; Kirigami.FormData.label: i18n("Steam:"); text: i18n("Games page and Continue playing") }
     QQC2.CheckBox { id: showFriends; text: i18n("Friends page and friend presence") }
+
+    Item { Kirigami.FormData.isSection: true }
+
+    QQC2.CheckBox { id: showTopBarFriends; Kirigami.FormData.label: i18n("Top bar shows:"); text: i18n("Friends online"); enabled: showFriends.checked }
+    QQC2.CheckBox { id: showTopBarClock; visible: !form.portal; text: i18n("Clock") }
+    QQC2.CheckBox { id: showTopBarSettings; text: i18n("System Settings button") }
+    QQC2.CheckBox { id: showTopBarPower; visible: !form.portal; text: i18n("Power and session button") }
+    QQC2.CheckBox { id: showSidebarFriends; Kirigami.FormData.label: i18n("Sidebar shows:"); text: i18n("Friends"); enabled: showFriends.checked }
+    QQC2.CheckBox { id: showSidebarSystem; text: i18n("System") }
+    QQC2.CheckBox { id: showSidebarSettings; text: i18n("Settings") }
+    QQC2.Label {
+        text: i18n("Each button shows once by default. A page whose button is hidden still opens with Alt and its number.")
+        opacity: 0.6
+    }
 
     Item { Kirigami.FormData.isSection: true }
 

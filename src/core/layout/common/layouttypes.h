@@ -25,13 +25,7 @@ enum class Activation
     Never
 };
 
-enum class ChangeKind
-{
-    SetFixed,
-    SetProportion,
-    AdjustFixed,
-    AdjustProportion
-};
+using ChangeKind = Config::SizeChangeKind;
 
 struct PositionChange
 {
@@ -73,6 +67,12 @@ struct WindowHeight
     static WindowHeight presetIndex(std::size_t index) { return {Kind::Preset, 0, index}; }
     bool isAuto() const { return kind == Kind::Auto; }
     bool operator==(const WindowHeight &) const = default;
+};
+
+struct CarriedHeight
+{
+    WindowHeight height;
+    double share = 1.0;
 };
 
 struct PresetExtent

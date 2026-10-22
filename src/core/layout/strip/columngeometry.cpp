@@ -10,14 +10,20 @@
 namespace Konveyor::Layout
 {
 
-double Column::width() const
+double Column::tileAreaWidth() const
 {
     double tilesWidth = 0.0;
     for (const Tile &tile : tiles) {
         tilesWidth = std::max(tilesWidth, tile.pendingOuterSize().width());
     }
+    return tilesWidth;
+}
+
+double Column::width() const
+{
+    double tilesWidth = tileAreaWidth();
     if (isTabbed() && sizingMode() == WindowMode::Normal) {
-        tilesWidth += tabBar.reservedSize(tiles.size(), m_area.scale).width();
+        tilesWidth += reservedSize().width();
     }
     return tilesWidth;
 }
@@ -25,7 +31,7 @@ double Column::width() const
 QSizeF Column::reservedSize() const
 {
     if (isTabbed()) {
-        return tabBar.reservedSize(tiles.size(), m_area.scale);
+        return tabBar.reservedSize(tiles.size(), m_area.scale, m_options->layout.gaps);
     }
     return {0.0, 0.0};
 }
@@ -76,7 +82,7 @@ QPointF Column::tileAreaOrigin() const
     }
     QPointF origin(0.0, m_area.workingArea.y() + m_options->layout.gaps);
     if (isTabbed()) {
-        origin += tabBar.contentOffset(tiles.size(), m_area.scale);
+        origin += tabBar.contentOffset(tiles.size(), m_area.scale, m_options->layout.gaps);
     }
     return origin;
 }
@@ -85,7 +91,7 @@ std::vector<QPointF> Column::tilePositions() const
 {
     const bool center = m_options->layout.centerFocusedColumn == Config::CenterFocusedColumn::Always;
     const double gaps = m_options->layout.gaps;
-    const double tilesWidth = width();
+    const double tilesWidth = tileAreaWidth();
 
     std::vector<QPointF> offsets;
     offsets.reserve(tiles.size() + 1);

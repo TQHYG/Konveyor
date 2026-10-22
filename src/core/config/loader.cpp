@@ -35,21 +35,19 @@ QString sourceLineOf(const LoadContext &context, const Kdl::Location &location)
     return line;
 }
 
-void resolveScopedLayouts(Config &config)
+void warnAboutHiddenWindowSwipes(LoadContext &context)
 {
-    for (OutputConfig &output : config.outputs) {
-        if (output.layoutPart) {
-            output.layout = mergedLayout(config.layout, *output.layoutPart);
-        }
-    }
-    for (MonitorProfile &profile : config.monitorProfiles) {
-        if (profile.layoutPart) {
-            profile.layout = mergedLayout(config.layout, *profile.layoutPart);
-        }
-    }
-    for (NamedWorkspace &workspace : config.workspaces) {
-        if (workspace.layoutPart) {
-            workspace.layout = mergedLayout(config.layout, *workspace.layoutPart);
+    const QList<std::pair<QString, const MultiTouch *>> devices {{QStringLiteral("touchpad"), &context.config.gestures.touchpad},
+        {QStringLiteral("touchscreen"), &context.config.gestures.touchscreen}};
+    for (const auto &[name, touch] : devices) {
+        const bool rowSwipes = touch->horizontalSwipe != HorizontalSwipe::Off || touch->verticalSwipe != VerticalSwipe::Off;
+        const bool windowSwipes
+            = touch->windowHorizontalSwipe != WindowHorizontalSwipe::Off || touch->windowVerticalSwipe != WindowVerticalSwipe::Off;
+        if (touch->enabled && rowSwipes && windowSwipes && touch->swipeFingers == touch->windowSwipeFingers) {
+            context.warnings.append(QStringLiteral("%1 swipe-fingers and window-swipe-fingers are both %2, so the window swipes never "
+                                                   "start; give them different finger counts")
+                    .arg(name)
+                    .arg(touch->swipeFingers));
         }
     }
 }
@@ -66,11 +64,11 @@ std::expected<LoadResult, LoadError> runLoad(LoadContext &context, const QString
     }
     try {
         processDocument(context, *document, baseDir, QStringList {QDir(baseDir).filePath(name)});
+        resolveBinds(context);
+        warnAboutHiddenWindowSwipes(context);
     } catch (const DecodeError &error) {
         return std::unexpected(LoadError {error.message, error.location, sourceLineOf(context, error.location), context.files});
     }
-    resolveBinds(context.config);
-    resolveScopedLayouts(context.config);
     return LoadResult {context.config, context.files, context.warnings};
 }
 

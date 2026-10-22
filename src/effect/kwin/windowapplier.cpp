@@ -2,6 +2,7 @@
 
 #include "kwin/windowregistry.h"
 
+#include "config/log.h"
 #include "layout/common/geometry.h"
 
 #include <KDecoration3/Decoration>
@@ -44,7 +45,12 @@ void WindowApplier::apply(const QList<Layout::WindowState> &states)
     const QScopedValueRollback guard(m_applying, true);
     for (const Layout::WindowState &state : states) {
         KWin::Window *window = m_windows.windowOf(state.id);
-        if (!window || isUserManipulated(window)) {
+        if (!window) {
+            continue;
+        }
+        applyOpacity(window, state);
+        logTargetChange(window, state);
+        if (isUserManipulated(window)) {
             continue;
         }
         const QRectF frame = placedFrame(state);
@@ -54,11 +60,9 @@ void WindowApplier::apply(const QList<Layout::WindowState> &states)
             m_appliedFrames.insert(state.id, frame);
         }
         applySizingMode(window, state);
-        applyGeometry(window, frame, requestedSize, !state.isFloating, state.isForceResizable || window->isResizable());
+        applyGeometry(window, frame, requestedSize, !state.isFloating, state.isForceResizable || window->isResizable(),
+            state.requestedSizingMode == Layout::WindowMode::Fullscreen);
         applyBorderRadius(window, state);
-        if (!qFuzzyCompare(window->opacity(), state.ruleOpacity)) {
-            window->setOpacity(state.ruleOpacity);
-        }
     }
     applyStacking(states);
 }
@@ -83,9 +87,46 @@ bool WindowApplier::isEchoOfAppliedFrame(Layout::WindowId id, const QRectF &fram
     return applied != m_appliedFrames.constEnd() && nearlyEqual(*applied, frame);
 }
 
+void WindowApplier::applyOpacity(KWin::Window *window, const Layout::WindowState &state)
+{
+    const auto overridden = m_overriddenOpacity.constFind(state.id);
+    if (state.ruleOpacity >= 1.0) {
+        if (overridden != m_overriddenOpacity.constEnd()) {
+            window->setOpacity(*overridden);
+            m_overriddenOpacity.erase(overridden);
+        }
+        return;
+    }
+    if (overridden == m_overriddenOpacity.constEnd()) {
+        m_overriddenOpacity.insert(state.id, window->opacity());
+    }
+    if (!qFuzzyCompare(window->opacity(), state.ruleOpacity)) {
+        window->setOpacity(state.ruleOpacity);
+    }
+}
+
 void WindowApplier::forget(Layout::WindowId id)
 {
+    m_overriddenOpacity.remove(id);
     m_appliedFrames.remove(id);
+    m_loggedTargets.remove(id);
+}
+
+void WindowApplier::logTargetChange(KWin::Window *window, const Layout::WindowState &state)
+{
+    const LoggedTarget target {state.targetFrame, state.output, state.workspace, state.columnIndex, state.isFloating, state.sizingMode,
+        state.requestedSizingMode, state.isWindowedFullscreen, window->isFullScreen()};
+    const auto previous = m_loggedTargets.constFind(state.id);
+    if (previous != m_loggedTargets.constEnd() && *previous == target) {
+        return;
+    }
+    m_loggedTargets.insert(state.id, target);
+    qCInfo(lcKonveyor).nospace() << "konveyor: target for window " << state.id << " (" << window->resourceClass()
+                                 << ") frame=" << target.frame << " output=" << target.output << " workspace=" << target.workspace
+                                 << " column=" << target.column << " floating=" << target.floating
+                                 << " sizing=" << static_cast<int>(target.sizing) << " requested=" << static_cast<int>(target.requested)
+                                 << " windowedFullscreen=" << target.windowedFullscreen << " kwinFullscreen=" << target.kwinFullscreen
+                                 << " current=" << window->frameGeometry() << " active=" << window->isActive();
 }
 
 QRectF WindowApplier::frameFor(const Layout::WindowState &state)
@@ -118,13 +159,13 @@ QRectF WindowApplier::placedFrame(const Layout::WindowState &state)
     return Layout::parkedFrame(frame, homeRect, outputs);
 }
 
-void WindowApplier::applyGeometry(
-    KWin::Window *window, const QRectF &frame, const std::optional<QSizeF> &requestedSize, bool tiled, bool allowResize) const
+void WindowApplier::applyGeometry(KWin::Window *window, const QRectF &frame, const std::optional<QSizeF> &requestedSize, bool tiled,
+    bool allowResize, bool fullscreenPresentation) const
 {
     if (frame.isEmpty()) {
         return;
     }
-    if (window->isFullScreen() || window->isRequestedFullScreen()) {
+    if (fullscreenPresentation || window->isFullScreen() || window->isRequestedFullScreen()) {
         if (!window->isActive()) {
             window->updateLayer();
         }
@@ -161,9 +202,13 @@ void WindowApplier::applySizingMode(KWin::Window *window, const Layout::WindowSt
 {
     const bool fullscreen = state.requestedSizingMode == Layout::WindowMode::Fullscreen && !state.isWindowedFullscreen;
     if (window->isFullScreen() != fullscreen && window->isFullScreenable()) {
+        qCInfo(lcKonveyor) << "konveyor: setting" << window->resourceClass() << "fullscreen =" << fullscreen
+                           << "requested mode =" << static_cast<int>(state.requestedSizingMode)
+                           << "windowed fullscreen =" << state.isWindowedFullscreen;
         window->setFullScreen(fullscreen);
     }
     if (window->requestedMaximizeMode() != KWin::MaximizeRestore && window->isMaximizable()) {
+        qCInfo(lcKonveyor) << "konveyor: restoring" << window->resourceClass() << "from KWin maximize";
         window->maximize(KWin::MaximizeRestore);
     }
     if (window->requestedTile()) {

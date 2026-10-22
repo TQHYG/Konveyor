@@ -1,9 +1,10 @@
 #include "plugin/konveyoreffect_p.h"
 
-#include <keyboard_input.h>
-#include <xkb.h>
+#include "config/log.h"
 
-#include <functional>
+#include <keyboard_input.h>
+#include <virtualdesktops.h>
+#include <xkb.h>
 
 namespace Konveyor
 {
@@ -13,61 +14,10 @@ namespace
 
 void runMonitorOverlay(const QStringList &arguments)
 {
-    QProcess::startDetached(QDir::home().filePath(QStringLiteral(".local/bin/monitor-overlay")), arguments);
-}
-
-void attachMonitorWindow(KWin::Window *window, KWin::Window *target)
-{
-    if (!window || !target || window == target) {
-        return;
+    const QString tool = QStringLiteral("monitor-overlay");
+    if (const auto started = Tools::startWidgetTool(tool, arguments); !started && Tools::widgetToolInstalled(tool)) {
+        qWarning().noquote() << "konveyor:" << started.error();
     }
-    if (KWin::Window *previous = window->transientFor(); previous && previous != target) {
-        previous->removeTransient(window);
-    }
-    if (!target->transients().contains(window)) {
-        target->addTransient(window);
-    }
-    if (window->transientFor() != target) {
-        window->setTransientFor(target);
-    }
-    window->setSkipTaskbar(true);
-    window->setSkipPager(true);
-    window->setSkipSwitcher(true);
-}
-
-void detachMonitorWindow(KWin::Window *window)
-{
-    if (window) {
-        if (KWin::Window *target = window->transientFor()) {
-            target->removeTransient(window);
-        }
-    }
-}
-
-using MonitorWindowMap = QHash<Layout::WindowId, QHash<int, QPointer<KWin::Window>>>;
-
-bool removeMonitorWindow(MonitorWindowMap &windows, KWin::Window *window, const std::function<void(Layout::WindowId)> &place)
-{
-    bool removed = false;
-    for (auto target = windows.begin(); target != windows.end();) {
-        auto &slotMap = target.value();
-        for (auto slot = slotMap.begin(); slot != slotMap.end();) {
-            if (slot.value() == window) {
-                slot = slotMap.erase(slot);
-                removed = true;
-            } else {
-                ++slot;
-            }
-        }
-        if (slotMap.isEmpty()) {
-            target = windows.erase(target);
-        } else {
-            const Layout::WindowId id = target.key();
-            ++target;
-            place(id);
-        }
-    }
-    return removed;
 }
 
 }
@@ -83,16 +33,35 @@ void KonveyorEffect::installInputFilter()
         const KWin::LogicalOutput *output = d->outputs.outputNamed(*home);
         return !output || QRectF(output->geometryF()).contains(position);
     });
+    const auto pointerBind
+        = [this](Config::BindTrigger trigger, Config::BindModifiers modifiers, Config::MouseButton button,
+              Config::ScrollDirection direction) { return d->shortcuts.triggerPointerBind(trigger, modifiers, button, direction); };
     d->input = std::make_unique<InputFilter>(InputHandlers {
-        [this](Config::BindTrigger trigger, Qt::KeyboardModifiers modifiers, Config::MouseButton button,
-            Config::ScrollDirection direction) { return d->shortcuts.triggerPointerBind(trigger, modifiers, button, direction); },
+        pointerBind,
         [this](const QPointF &position, qint64 timestamp) { handlePointerMotion(position, timestamp); },
         [this] { endTitlebarDrag(); },
-        [this](quint32 keycode, Qt::KeyboardModifiers modifiers, bool repeat) {
+        [this](const QPointF &position) { return switchToTabUnderPointer(position); },
+        [this](quint32 keycode, Config::BindModifiers modifiers, bool repeat) {
             const KWin::Xkb *xkb = KWin::input()->keyboard()->xkb();
             return d->shortcuts.triggerKeyPosition(keycode, modifiers, repeat, xkb->keymap(), xkb->currentLayout());
         },
+        [this] { markMoveCancelled(); },
+        [this] { return toggleDragFloating(); },
+        [this](bool super, bool alt) {
+            if (d->dbus) {
+                d->dbus->setModifiersHeld(super, alt);
+            }
+        },
     });
+    d->axisInput = std::make_unique<AxisFilter>(pointerBind);
+    d->dragMotion = std::make_unique<DragMotionFilter>([this](const QPointF &position, qint64 timestampMs) {
+        changeEngine().dataDragEdgeScroll(outputNameAt(position), position, timestampMs);
+    });
+    installGestureFilters();
+}
+
+void KonveyorEffect::installGestureFilters()
+{
     d->gestureInput = std::make_unique<GestureFilter>(GestureHandlers {
         [this](int fingers) { return routeGesture(d->gestures.touchpadSwipeBegin(fingers, outputNameAt(KWin::effects->cursorPos()))); },
         [this](const QPointF &delta, qint64 timestamp) { return routeGesture(d->gestures.touchpadSwipeUpdate(delta, timestamp)); },
@@ -103,11 +72,7 @@ void KonveyorEffect::installInputFilter()
         [this](qint32 id, const QPointF &position, qint64 timestamp) { return handleTouchDown(id, position, timestamp); },
         [this](qint32 id, const QPointF &position, qint64 timestamp) { return handleTouchMotion(id, position, timestamp); },
         [this](qint32 id, qint64 timestamp) { return handleTouchUp(id, timestamp); },
-        [this] {
-            d->gestures.touchCancel();
-            endTitlebarDrag();
-            scheduleFlush();
-        },
+        [this] { handleTouchCancel(); },
         [this] { routeGesture(d->gestures.resetTouches()); },
         [this](bool active) {
             if (d->dbus) {
@@ -124,24 +89,6 @@ void KonveyorEffect::installInputFilter()
         [this] { d->gestures.touchpadPhysicalClick(); },
         [this] { d->gestures.touchpadContactsReset(); },
     });
-}
-
-void KonveyorEffect::startDBusService()
-{
-    d->dbus = std::make_unique<DBusService>(DBusHandlers {
-        [this] { return windowsJson(); },
-        [this] { return workspacesJson(); },
-        [this] { return outputsJson(); },
-        [this] { return focusedWindowJson(); },
-        [this] { return focusedOutputJson(); },
-        [this] { return bindsJson(); },
-        [this](const QString &json) { return performActionJson(json); },
-        [this](const QString &path) { return d->config.load(path); },
-        [this] { return readEngine().isOverviewOpen(); },
-        [this] { return lastBindJson(); },
-        [this] { return QJsonDocument(Ipc::gesturesToJson(d->gestures.config())); },
-    });
-    d->dbus->registerService();
 }
 
 void KonveyorEffect::connectRegistries()
@@ -172,35 +119,36 @@ void KonveyorEffect::connectWindowLifecycle()
     }
     connect(&d->windows, &WindowRegistry::windowAdded, this, &KonveyorEffect::onWindowAdded);
     connect(&d->windows, &WindowRegistry::windowRemoved, this, [this](Layout::WindowId id) {
+        if (d->quickTiling && d->quickTiling->window == id) {
+            releaseQuickTiling();
+        }
         changeEngine().removeWindow(id);
+        followActiveWindowAfterClose();
         d->decorations.remove(id);
         d->fullscreenShade.remove(id);
         d->applier.forget(id);
         d->homeOutputs.remove(id);
     });
-    connect(&d->windows, &WindowRegistry::windowMinimizing, this, [this](Layout::WindowId id, KWin::Window *window) {
-        const std::optional<Layout::RestorePlacement> placement = readEngine().placementOf(id);
-        if (!placement) {
-            return;
+    connect(&d->windows, &WindowRegistry::windowHiding, this, [this](Layout::WindowId id, KWin::Window *window) {
+        if (const std::optional<Layout::RestorePlacement> placement = readEngine().placementOf(id)) {
+            rememberHiddenPlacement(window, *placement);
         }
-        if (!d->minimizedPlacements.contains(window)) {
-            connect(window, &QObject::destroyed, this, [this, window] { d->minimizedPlacements.remove(window); });
-        }
-        d->minimizedPlacements.insert(window, *placement);
     });
     connect(&d->windows, &WindowRegistry::propertiesChanged, this, [this](Layout::WindowId id) {
         if (KWin::Window *window = d->windows.windowOf(id)) {
             changeEngine().updateWindowProperties(id, d->windows.propertiesOf(window));
         }
     });
-    connect(&d->windows, &WindowRegistry::activeWindowChanged, this, &KonveyorEffect::followActiveWindow);
+    connect(&d->windows, &WindowRegistry::activeWindowChanged, this, &KonveyorEffect::onActiveWindowChanged);
 }
 
 void KonveyorEffect::connectWindowState()
 {
     connect(&d->windows, &WindowRegistry::sizeCommitted, this, &KonveyorEffect::handleWindowSizeCommitted);
     connect(&d->windows, &WindowRegistry::fullscreenRequested, this, [this](Layout::WindowId id, bool fullscreen) {
-        if (!d->applier.isApplying()) {
+        if (d->applier.isApplying()) {
+            qCInfo(lcKonveyor) << "konveyor: fullscreen change for window" << id << "=" << fullscreen << "came from Konveyor itself";
+        } else {
             changeEngine().setWindowFullscreen(id, fullscreen);
         }
     });
@@ -233,6 +181,11 @@ void KonveyorEffect::handleWindowSizeCommitted(Layout::WindowId id, const QSizeF
     const bool resizedByUser = !d->applier.isApplying() && window && window->isInteractiveResize();
     const std::optional<Layout::WindowState> state = readEngine().windowState(id);
     const bool resizedByApp = !d->applier.isApplying() && window && !window->isResizable() && state && !state->isForceResizable;
+    if (!acknowledgesRequest && !resizedByUser && !d->applier.isApplying()) {
+        qCInfo(lcKonveyor) << "konveyor: window" << id << (window ? window->resourceClass() : QString()) << "committed unrequested size"
+                           << size << "resizable =" << (window && window->isResizable()) << "taken as app resize =" << resizedByApp
+                           << "target =" << (state ? state->targetFrame : QRectF());
+    }
     if (resizedByApp) {
         changeEngine().updateWindowProperties(id, d->windows.propertiesOf(window));
     }
@@ -260,24 +213,83 @@ void KonveyorEffect::connectOutputs()
 
 void KonveyorEffect::connectDesktopSync()
 {
-    connect(&d->desktops, &DesktopSync::workspaceActivatedByUser, this,
-        [this](const QString &output, int index) { changeEngine().focusWorkspace(output, index); });
+    connect(&d->desktops, &DesktopSync::workspaceActivatedByUser, this, [this](const QString &output, int index) {
+        qCInfo(lcKonveyor) << "konveyor: KDE switched to desktop" << index << "on" << output;
+        changeEngine().focusWorkspace(output, index);
+    });
     connect(&d->desktops, &DesktopSync::windowMovedToWorkspaceByUser, this, [this](Layout::WindowId id, int index) {
+        qCInfo(lcKonveyor) << "konveyor: KDE moved window" << id << "to desktop" << index;
         changeEngine().perform({QStringLiteral("move-window-to-workspace"), {QString::number(index)}, {}}, id);
     });
 }
 
+void KonveyorEffect::rememberHiddenPlacement(KWin::Window *window, const Layout::RestorePlacement &placement)
+{
+    if (!d->hiddenPlacements.contains(window)) {
+        connect(window, &QObject::destroyed, this, [this, window] { d->hiddenPlacements.remove(window); });
+    }
+    d->hiddenPlacements.insert(window, placement);
+}
+
+void KonveyorEffect::takeHandedOverHiddenPlacements()
+{
+    for (KWin::Window *window : KWin::workspace()->windows()) {
+        if (d->windows.idOf(window)) {
+            continue;
+        }
+        if (const std::optional<HandedOverPlacement> handed = d->handoff.takePlacement(window, readEngine())) {
+            qCInfo(lcKonveyor) << "konveyor: keeping the place of hidden window" << window->resourceClass() << "through the reload";
+            rememberHiddenPlacement(window, handed->placement);
+        }
+    }
+}
+
+void KonveyorEffect::adoptOntoKdeDesktop(Layout::WindowId id, KWin::Window *window)
+{
+    if (window->isOnAllDesktops() || window->desktops().size() != 1) {
+        return;
+    }
+    const int desktop = static_cast<int>(KWin::VirtualDesktopManager::self()->desktops().indexOf(window->desktops().constFirst())) + 1;
+    const std::optional<Layout::WindowState> state = readEngine().windowState(id);
+    if (desktop < 1 || !state || state->workspaceIndex == desktop) {
+        return;
+    }
+    qCInfo(lcKonveyor) << "konveyor: adopting" << window->resourceClass() << "onto workspace" << desktop << "to match its KDE desktop";
+    changeEngine().perform(
+        {QStringLiteral("move-window-to-workspace"), {QString::number(desktop)}, {{QStringLiteral("focus"), QStringLiteral("false")}}}, id);
+}
+
+void KonveyorEffect::showOnAllDesktopsByRule(Layout::WindowId id, KWin::Window *window)
+{
+    const std::optional<Layout::WindowState> state = readEngine().windowState(id);
+    if (state && state->wantsAllDesktops && !window->isOnAllDesktops()) {
+        window->setOnAllDesktops(true);
+    }
+}
+
 void KonveyorEffect::onWindowAdded(Layout::WindowId id, KWin::Window *window)
 {
-    const auto restore = d->minimizedPlacements.constFind(window);
+    const auto restore = d->hiddenPlacements.constFind(window);
     const std::optional<Layout::RestorePlacement> placement
-        = restore == d->minimizedPlacements.constEnd() ? std::nullopt : std::optional(*restore);
-    d->minimizedPlacements.remove(window);
-    changeEngine().addWindow(id, d->windows.propertiesOf(window), outputNameOf(window), Layout::ActivationPolicy::Smart, placement);
+        = restore == d->hiddenPlacements.constEnd() ? std::nullopt : std::optional(*restore);
+    d->hiddenPlacements.remove(window);
+    if (const std::optional<HandedOverPlacement> handed = d->handoff.takePlacement(window, readEngine())) {
+        qCInfo(lcKonveyor) << "konveyor: window" << id << window->resourceClass() << "takes a handed-over placement on" << handed->output;
+        changeEngine().addWindow(id, d->windows.propertiesOf(window), handed->output, Layout::ActivationPolicy::NoFocus, handed->placement);
+    } else {
+        changeEngine().addWindow(id, d->windows.propertiesOf(window), outputNameOf(window), Layout::ActivationPolicy::Smart, placement);
+        if (!placement && d->windows.isAdopting()) {
+            adoptOntoKdeDesktop(id, window);
+        }
+        if (!placement) {
+            showOnAllDesktopsByRule(id, window);
+        }
+    }
     connect(window, &KWin::Window::frameGeometryChanged, this, [this, id] {
         placeMonitorOverlays(id);
         placeMonitorPanels(id);
     });
+    connect(window, &KWin::Window::outputChanged, this, [this, id] { keepOnHomeOutput(id); });
     connect(window, &KWin::Window::fullScreenChanged, this, [this, id, window] {
         placeMonitorOverlays(id);
         if (d->monitorOverlays.contains(id)) {
@@ -289,109 +301,6 @@ void KonveyorEffect::onWindowAdded(Layout::WindowId id, KWin::Window *window)
     if (window == KWin::workspace()->activeWindow()) {
         followActiveWindow();
     }
-}
-
-void KonveyorEffect::observeMonitorOverlay(KWin::Window *window)
-{
-    static const QRegularExpression pattern(QStringLiteral("^Konveyor Monitor (Overlay|Panel) (\\d+) ([0-2])$"));
-    if (!window) {
-        return;
-    }
-    const QRegularExpressionMatch match = pattern.match(window->caption());
-    if (match.hasMatch()) {
-        const bool panel = match.captured(1) == QLatin1String("Panel");
-        const Layout::WindowId target = match.captured(2).toULongLong();
-        const int slot = match.captured(3).toInt();
-        const auto &windows = panel ? d->monitorPanels : d->monitorOverlays;
-        if (windows.value(target).value(slot) == window) {
-            return;
-        }
-    }
-    forgetMonitorOverlay(window);
-    if (!match.hasMatch()) {
-        return;
-    }
-    const bool panel = match.captured(1) == QLatin1String("Panel");
-    const Layout::WindowId target = match.captured(2).toULongLong();
-    const int slot = match.captured(3).toInt();
-    KWin::Window *targetWindow = d->windows.windowOf(target);
-    if (!targetWindow) {
-        return;
-    }
-    attachMonitorWindow(window, targetWindow);
-    if (panel) {
-        d->monitorPanels[target].insert(slot, window);
-        connect(window, &KWin::Window::frameGeometryChanged, this, [this, target] { placeMonitorPanels(target); });
-        placeMonitorPanels(target);
-    } else {
-        d->monitorOverlays[target].insert(slot, window);
-        connect(window, &KWin::Window::frameGeometryChanged, this, [this, target] { placeMonitorOverlays(target); });
-        placeMonitorOverlays(target);
-    }
-}
-
-void KonveyorEffect::forgetMonitorOverlay(KWin::Window *window)
-{
-    bool forgotten = removeMonitorWindow(d->monitorOverlays, window, [this](Layout::WindowId id) { placeMonitorOverlays(id); });
-    forgotten = removeMonitorWindow(d->monitorPanels, window, [this](Layout::WindowId id) { placeMonitorPanels(id); }) || forgotten;
-    if (forgotten) {
-        detachMonitorWindow(window);
-    }
-}
-
-void KonveyorEffect::placeMonitorOverlays(Layout::WindowId id)
-{
-    if (d->placingMonitorOverlays.contains(id)) {
-        return;
-    }
-    KWin::Window *target = d->windows.windowOf(id);
-    const auto overlays = d->monitorOverlays.value(id);
-    if (!target || overlays.isEmpty()) {
-        return;
-    }
-    d->placingMonitorOverlays.insert(id);
-    qreal width = 0;
-    for (int slot = 0; slot < 3; ++slot) {
-        if (KWin::Window *overlay = overlays.value(slot)) {
-            width += overlay->frameGeometry().width();
-        }
-    }
-    qreal x = target->frameGeometry().x() + (target->frameGeometry().width() - width) / 2;
-    const qreal y = target->frameGeometry().y();
-    for (int slot = 0; slot < 3; ++slot) {
-        if (KWin::Window *overlay = overlays.value(slot)) {
-            const QPointF position(qRound(x), qRound(y));
-            if (overlay->frameGeometry().topLeft() != position) {
-                overlay->move(position);
-            }
-            x += overlay->frameGeometry().width();
-        }
-    }
-    d->placingMonitorOverlays.remove(id);
-}
-
-void KonveyorEffect::placeMonitorPanels(Layout::WindowId id)
-{
-    if (d->placingMonitorPanels.contains(id)) {
-        return;
-    }
-    KWin::Window *target = d->windows.windowOf(id);
-    const auto panels = d->monitorPanels.value(id);
-    if (!target || panels.isEmpty()) {
-        return;
-    }
-    d->placingMonitorPanels.insert(id);
-    for (KWin::Window *panel : panels) {
-        if (!panel) {
-            continue;
-        }
-        const QPointF position(qRound(target->frameGeometry().x() + (target->frameGeometry().width() - panel->frameGeometry().width()) / 2),
-            qRound(target->frameGeometry().y() + (target->frameGeometry().height() - panel->frameGeometry().height()) / 2));
-        if (panel->frameGeometry().topLeft() != position) {
-            panel->move(position);
-        }
-    }
-    d->placingMonitorPanels.remove(id);
 }
 
 }

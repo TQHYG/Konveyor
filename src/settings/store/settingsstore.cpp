@@ -3,6 +3,7 @@
 #include "config/loader.h"
 #include "document/nodecodec.h"
 #include "store/configfile.h"
+#include "store/includeoverrides.h"
 #include "system/keynames.h"
 #include "values/configvalues.h"
 #include "values/livematching.h"
@@ -20,13 +21,14 @@ namespace
 
 constexpr int SaveDelayMs = 350;
 
+QString nodeName(const QString &path)
+{
+    return path.section(QLatin1Char('/'), -1).section(QLatin1Char('#'), 0, 0);
+}
+
 QVariantMap leaf(const QString &path, const QVariantList &arguments, const QVariantMap &properties)
 {
-    return {
-        {QStringLiteral("name"), path.section(QLatin1Char('/'), -1).section(QLatin1Char('#'), 0, 0)},
-        {QStringLiteral("args"), arguments},
-        {QStringLiteral("props"), properties},
-    };
+    return {{QStringLiteral("name"), nodeName(path)}, {QStringLiteral("args"), arguments}, {QStringLiteral("props"), properties}};
 }
 
 }
@@ -100,9 +102,9 @@ void SettingsStore::setAutoSave(bool autoSave)
 void SettingsStore::load()
 {
     const QString defaultPath = QStandardPaths::locate(QStandardPaths::GenericDataLocation, QStringLiteral("konveyor/default-config.kdl"));
-    m_defaultText = readConfigText(defaultPath).value_or(QString());
+    m_defaultText = defaultPath.isEmpty() ? QString() : readConfigText(defaultPath).value_or(QString());
     m_defaults = ConfigDocument(m_defaultText);
-    m_savedText = readConfigText(configPath()).value_or(m_defaultText);
+    m_savedText = readSaved().value_or(m_defaultText);
     m_history.clear();
     replaceText(m_savedText);
     watch();
@@ -114,8 +116,13 @@ void SettingsStore::load()
 void SettingsStore::save()
 {
     m_saveTimer.stop();
-    if (!m_configError.isEmpty()) {
-        Q_EMIT editFailed(QStringLiteral("Not saved, the config has an error: ") + m_configError);
+    if (const std::optional<QString> disk = readSaved(); disk && *disk != m_savedText) {
+        adoptDisk(*disk);
+        return;
+    }
+    const QString error = m_readError.isEmpty() ? m_configError : m_readError;
+    if (!error.isEmpty()) {
+        Q_EMIT editFailed(QStringLiteral("Not saved, the config has an error: ") + error);
         return;
     }
     const QString text = m_document.text();
@@ -182,6 +189,12 @@ QVariantMap SettingsStore::node(const QString &path) const
     return found ? nodeToVariant(*found) : QVariantMap();
 }
 
+QVariantMap SettingsStore::defaultNode(const QString &path) const
+{
+    const Kdl::Node *found = m_defaults.find(path);
+    return found ? nodeToVariant(*found) : QVariantMap();
+}
+
 QVariantList SettingsStore::children(const QString &parentPath, const QString &name) const
 {
     return m_document.childPaths(parentPath, name);
@@ -189,28 +202,27 @@ QVariantList SettingsStore::children(const QString &parentPath, const QString &n
 
 QVariantMap SettingsStore::scope(const QString &layoutPath) const
 {
-    auto loaded = Config::loadString(m_document.text(), configPath());
-    if (!loaded) {
-        return {};
-    }
     const QString owner = layoutPath.section(QLatin1Char('/'), 0, -2);
     const Kdl::Node *ownerNode = owner.isEmpty() ? nullptr : m_document.find(owner);
     const QString ownerName = ownerNode && !ownerNode->arguments.isEmpty() && ownerNode->arguments.first().isString()
         ? ownerNode->arguments.first().toString()
         : QString();
-    return layoutValues(scopedLayout(loaded->config, owner.section(QLatin1Char('#'), 0, 0), ownerName));
+    return layoutValues(scopedLayout(m_config, owner.section(QLatin1Char('#'), 0, 0), ownerName, m_live->outputs(), m_live->workspaces()));
 }
 
 bool SettingsStore::setNode(const QString &path, const QVariantMap &node)
 {
     const QString before = m_document.text();
-    return apply(m_document.setNode(path, node), before);
+    const bool applied = apply(m_document.setNode(path, node), before);
+    if (applied) {
+        warnIfOverridden(node.value(QStringLiteral("name")).toString(), {path});
+    }
+    return applied;
 }
 
 bool SettingsStore::setValue(const QString &path, const QVariantList &arguments, const QVariantMap &properties)
 {
-    const QString before = m_document.text();
-    return apply(m_document.setNode(path, leaf(path, arguments, properties)), before);
+    return setNode(path, leaf(path, arguments, properties));
 }
 
 bool SettingsStore::setFlag(const QString &path, bool enabled)
@@ -223,13 +235,21 @@ bool SettingsStore::setToggle(const QString &path, bool enabled)
     const QString before = m_document.text();
     const bool removed
         = apply(m_document.remove(path + QStringLiteral("/on")), before) && apply(m_document.remove(path + QStringLiteral("/off")), before);
-    return removed && apply(m_document.append(path, leaf(enabled ? QStringLiteral("on") : QStringLiteral("off"), {}, {})), before);
+    if (!removed || !apply(m_document.append(path, leaf(enabled ? QStringLiteral("on") : QStringLiteral("off"), {}, {})), before)) {
+        return false;
+    }
+    warnIfOverridden(nodeName(path), {path + QStringLiteral("/on"), path + QStringLiteral("/off")});
+    return true;
 }
 
 bool SettingsStore::remove(const QString &path)
 {
     const QString before = m_document.text();
-    return apply(m_document.remove(path), before);
+    const bool applied = apply(m_document.remove(path), before);
+    if (applied) {
+        warnIfOverridden(nodeName(path), {path});
+    }
+    return applied;
 }
 
 QString SettingsStore::append(const QString &parentPath, const QVariantMap &node)
@@ -268,8 +288,7 @@ QVariantMap SettingsStore::checkRule(const QVariantMap &ruleNode) const
 
 QString SettingsStore::profileForOutput(const QVariantMap &output) const
 {
-    const auto current = Config::loadString(m_document.text(), configPath());
-    return current ? profileNameFor(current->config, output) : QString();
+    return profileNameFor(m_config, output);
 }
 
 void SettingsStore::openConfigFile() const
@@ -299,13 +318,28 @@ void SettingsStore::replaceText(const QString &text)
     refresh();
 }
 
+std::optional<QString> SettingsStore::readSaved()
+{
+    const QString path = configPath();
+    std::optional<QString> text = readConfigText(path);
+    m_readError
+        = !text && QFileInfo::exists(path) ? QStringLiteral("Could not read %1, so Settings will not save over it.").arg(path) : QString();
+    return text;
+}
+
 void SettingsStore::refresh()
 {
     auto loaded = Config::loadString(m_document.text(), configPath());
-    m_configError = loaded ? QString() : loaded.error().toString();
+    m_configError = !m_readError.isEmpty() ? m_readError : loaded ? QString() : loaded.error().toString();
     if (loaded) {
-        m_values = globalValues(loaded->config);
+        m_config = loaded->config;
     }
+    for (const QString &file : loaded ? loaded->files : loaded.error().files) {
+        if (!m_watcher.files().contains(file) && QFileInfo::exists(file)) {
+            m_watcher.addPath(file);
+        }
+    }
+    m_values = globalValues(m_config);
     ++m_revision;
     Q_EMIT documentChanged();
 }
@@ -325,13 +359,41 @@ void SettingsStore::watch()
 void SettingsStore::fileChanged()
 {
     watch();
-    const std::optional<QString> disk = readConfigText(configPath());
-    if (!disk || *disk == m_savedText || m_saveTimer.isActive() || needsSave()) {
+    const std::optional<QString> disk = readSaved();
+    if (!disk || *disk == m_savedText) {
+        refresh();
         return;
     }
-    m_savedText = *disk;
+    adoptDisk(*disk);
+}
+
+void SettingsStore::adoptDisk(const QString &disk)
+{
+    if (m_saveTimer.isActive() || needsSave()) {
+        Q_EMIT editFailed(
+            QStringLiteral("%1 changed on disk, so Settings loaded it. Your changes here that were not saved yet were not applied.")
+                .arg(configPath()));
+    }
+    m_saveTimer.stop();
+    m_savedText = disk;
     m_history.clear();
-    replaceText(*disk);
+    replaceText(disk);
+}
+
+void SettingsStore::warnIfOverridden(const QString &name, const QStringList &paths)
+{
+    QStringList files;
+    for (const QString &path : paths) {
+        for (const QString &file : includesOverriding(m_document.text(), configPath(), path)) {
+            if (!files.contains(file)) {
+                files.append(file);
+            }
+        }
+    }
+    if (!files.isEmpty()) {
+        Q_EMIT editFailed(QStringLiteral("%1 is also set in %2, which is included later, so that value is the one Konveyor uses.")
+                .arg(name, files.join(QStringLiteral(", "))));
+    }
 }
 
 }

@@ -8,7 +8,10 @@
 #include <window.h>
 #include <workspace.h>
 
+#include <QMap>
 #include <QScopedValueRollback>
+
+#include <algorithm>
 
 namespace Konveyor
 {
@@ -40,6 +43,21 @@ int maxWorkspaceIndex(const QList<Layout::WorkspaceState> &workspaces)
     return count;
 }
 
+QMap<int, QString> activeNames(const QList<Layout::WorkspaceState> &workspaces)
+{
+    QMap<int, QString> names;
+    for (const Layout::WorkspaceState &workspace : workspaces) {
+        if (!workspace.isActive) {
+            continue;
+        }
+        QString &name = names[workspace.index];
+        if (name.isEmpty() || (workspace.isFocused && !workspace.name.isEmpty())) {
+            name = workspace.name;
+        }
+    }
+    return names;
+}
+
 }
 
 DesktopSync::DesktopSync(const WindowRegistry &windows, const OutputRegistry &outputs, QObject *parent)
@@ -50,14 +68,44 @@ DesktopSync::DesktopSync(const WindowRegistry &windows, const OutputRegistry &ou
 
 DesktopSync::~DesktopSync()
 {
+    for (auto it = m_originalNames.cbegin(); it != m_originalNames.cend(); ++it) {
+        if (KWin::VirtualDesktop *desktop = manager()->desktopForId(it.key())) {
+            desktop->setName(it.value());
+        }
+    }
+    restoreDesktops();
     manager()->setPerOutputVirtualDesktops(m_previousPerOutput);
     manager()->setRows(m_previousRows);
+}
+
+void DesktopSync::restoreDesktops()
+{
+    const QScopedValueRollback guard(m_applying, true);
+    const auto isOriginal = [this](const KWin::VirtualDesktop *desktop) {
+        return std::ranges::any_of(m_previousDesktops, [desktop](const auto &previous) { return previous.first == desktop->id(); });
+    };
+    for (qsizetype position = 0; position < m_previousDesktops.size(); ++position) {
+        const QString &name = m_previousDesktops.at(position).second;
+        if (KWin::VirtualDesktop *desktop = manager()->desktops().value(position, nullptr)) {
+            if (!isOriginal(desktop) && desktop->name() != name) {
+                desktop->setName(name);
+            }
+        } else {
+            manager()->createVirtualDesktop(static_cast<uint>(position), name);
+        }
+    }
+    while (manager()->desktops().size() > std::max<qsizetype>(m_previousDesktops.size(), 1)) {
+        manager()->removeVirtualDesktop(manager()->desktops().constLast());
+    }
 }
 
 void DesktopSync::start()
 {
     m_previousPerOutput = manager()->isPerOutputVirtualDesktops();
     m_previousRows = manager()->rows();
+    for (const KWin::VirtualDesktop *desktop : manager()->desktops()) {
+        m_previousDesktops.append({desktop->id(), desktop->name()});
+    }
     manager()->setPerOutputVirtualDesktops(true);
     connect(KWin::workspace(), &KWin::Workspace::currentDesktopChanged, this,
         [this](KWin::VirtualDesktop *previous, KWin::VirtualDesktop *current, KWin::LogicalOutput *output) {
@@ -67,7 +115,7 @@ void DesktopSync::start()
         [this](Layout::WindowId id, KWin::Window *window) { watchWindowDesktops(window, id); });
 }
 
-void DesktopSync::apply(const QList<Layout::WorkspaceState> &workspaces, const QList<Layout::WindowState> &windows)
+void DesktopSync::apply(const QList<Layout::WorkspaceState> &workspaces, const QList<Layout::WindowState> &windows, bool horizontal)
 {
     const QScopedValueRollback guard(m_applying, true);
     const int count = maxWorkspaceIndex(workspaces);
@@ -75,6 +123,7 @@ void DesktopSync::apply(const QList<Layout::WorkspaceState> &workspaces, const Q
     applyWindowDesktops(windows);
     applyCurrentDesktops(workspaces);
     shrinkDesktops(count);
+    applyRows(horizontal);
     applyNames(workspaces);
 }
 
@@ -83,7 +132,6 @@ void DesktopSync::growDesktops(int count)
     while (static_cast<int>(manager()->count()) < count) {
         manager()->createVirtualDesktop(manager()->count());
     }
-    manager()->setRows(std::max(manager()->count(), 1U));
 }
 
 void DesktopSync::shrinkDesktops(int count)
@@ -91,18 +139,30 @@ void DesktopSync::shrinkDesktops(int count)
     while (static_cast<int>(manager()->count()) > count) {
         manager()->removeVirtualDesktop(manager()->desktops().constLast());
     }
-    manager()->setRows(std::max(manager()->count(), 1U));
+}
+
+void DesktopSync::applyRows(bool horizontal)
+{
+    const uint rows = horizontal ? 1U : std::max(manager()->count(), 1U);
+    if (manager()->rows() != rows) {
+        manager()->setRows(rows);
+    }
 }
 
 void DesktopSync::applyNames(const QList<Layout::WorkspaceState> &workspaces)
 {
-    for (const Layout::WorkspaceState &workspace : workspaces) {
-        if (workspace.name.isEmpty() || !workspace.isActive) {
+    const QMap<int, QString> names = activeNames(workspaces);
+    for (auto it = names.cbegin(); it != names.cend(); ++it) {
+        KWin::VirtualDesktop *desktop = desktopAt(it.key());
+        if (!desktop || (it.value().isEmpty() && !m_originalNames.contains(desktop->id()))) {
             continue;
         }
-        KWin::VirtualDesktop *desktop = desktopAt(workspace.index);
-        if (desktop && desktop->name() != workspace.name) {
-            desktop->setName(workspace.name);
+        if (!m_originalNames.contains(desktop->id())) {
+            m_originalNames.insert(desktop->id(), desktop->name());
+        }
+        const QString name = it.value().isEmpty() ? m_originalNames.take(desktop->id()) : it.value();
+        if (desktop->name() != name) {
+            desktop->setName(name);
         }
     }
 }
@@ -124,6 +184,9 @@ void DesktopSync::applyCurrentDesktops(const QList<Layout::WorkspaceState> &work
 void DesktopSync::applyWindowDesktops(const QList<Layout::WindowState> &windows)
 {
     for (const Layout::WindowState &state : windows) {
+        if (state.onAllDesktops) {
+            continue;
+        }
         KWin::Window *window = m_windows.windowOf(state.id);
         KWin::VirtualDesktop *desktop = desktopAt(state.workspaceIndex);
         if (window && desktop && window->desktops() != QList<KWin::VirtualDesktop *> {desktop}) {
@@ -134,7 +197,7 @@ void DesktopSync::applyWindowDesktops(const QList<Layout::WindowState> &windows)
 
 void DesktopSync::watchWindowDesktops(KWin::Window *window, Layout::WindowId id)
 {
-    connect(window, &KWin::Window::desktopsChanged, this, [this, window, id]() {
+    connect(window, &KWin::Window::desktopsChanged, this, [this, window, id] {
         if (m_applying || m_windows.idOf(window) != id || window->desktops().size() != 1) {
             return;
         }

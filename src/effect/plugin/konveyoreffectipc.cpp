@@ -23,6 +23,11 @@ bool isAtNativeWidthEdge(const Layout::WindowState &state, bool forwards)
     return forwards ? *state.widthPresetIndex == predecessor : *state.widthPresetIndex == successor;
 }
 
+Ipc::WindowIdentity identityOf(Layout::WindowId id, KWin::Window *window)
+{
+    return {id, window->caption(), window->resourceClass(), window->pid(), window->internalId().toString()};
+}
+
 void notifyForceResizable(KWin::Window *window, const QString &appId, bool enabled)
 {
     auto *notification = new KNotification(QStringLiteral("notification"), KNotification::CloseOnTimeout);
@@ -35,13 +40,38 @@ void notifyForceResizable(KWin::Window *window, const QString &appId, bool enabl
 
 }
 
+void KonveyorEffect::startDBusService()
+{
+    d->dbus = std::make_unique<DBusService>(DBusHandlers {
+        [this] { return windowsJson(); },
+        [this] { return workspacesJson(); },
+        [this] { return outputsJson(); },
+        [this] { return focusedWindowJson(); },
+        [this] { return focusedOutputJson(); },
+        [this] { return bindsJson(); },
+        [this](const QString &json) { return performActionJson(json); },
+        [this](const QString &path) {
+            if (QDir::isRelativePath(path) && !path.isEmpty()) {
+                return QStringLiteral("LoadConfigFile needs an absolute path, got %1").arg(path);
+            }
+            return d->config.load(path);
+        },
+        [this] { return readEngine().isOverviewOpen(); },
+        [this] { return lastBindJson(); },
+        [this] { return QJsonDocument(Ipc::gesturesToJson(d->gestures.config())); },
+        [this](const QString &json) { return appRulesJson(json); },
+        [this](const QString &json) { return setAppRuleJson(json); },
+    });
+    d->dbus->registerService();
+}
+
 QJsonDocument KonveyorEffect::windowsJson() const
 {
     QJsonArray array;
     const QList<Layout::WindowState> states = readEngine().windowStates();
     for (const Layout::WindowState &state : states) {
         if (KWin::Window *window = d->windows.windowOf(state.id)) {
-            array.append(Ipc::windowToJson({state.id, window->caption(), window->resourceClass(), window->pid()}, state));
+            array.append(Ipc::windowToJson(identityOf(state.id, window), state));
         }
     }
     return QJsonDocument(array);
@@ -75,7 +105,7 @@ QJsonDocument KonveyorEffect::focusedWindowJson() const
     if (!window || !state) {
         return QJsonDocument();
     }
-    return QJsonDocument(Ipc::windowToJson({*id, window->caption(), window->resourceClass(), window->pid()}, *state));
+    return QJsonDocument(Ipc::windowToJson(identityOf(*id, window), *state));
 }
 
 QJsonDocument KonveyorEffect::focusedOutputJson() const
@@ -103,9 +133,20 @@ QJsonDocument KonveyorEffect::bindsJson() const
 
 QString KonveyorEffect::performActionJson(const QString &json)
 {
-    const auto request = Ipc::actionFromJson(QJsonDocument::fromJson(json.toUtf8()).object());
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError) {
+        return QStringLiteral("invalid action JSON: %1").arg(error.errorString());
+    }
+    if (!document.isObject()) {
+        return QStringLiteral("invalid action JSON: expected an object");
+    }
+    const auto request = Ipc::actionFromJson(document.object());
     if (!request) {
         return request.error();
+    }
+    if (request->target && !d->windows.windowOf(*request->target)) {
+        return QStringLiteral("no window with id %1").arg(*request->target);
     }
     const Layout::ActionResult result = performAction(request->action, request->target);
     return result.ok ? QString() : result.error;

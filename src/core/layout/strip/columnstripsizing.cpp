@@ -40,7 +40,7 @@ bool ColumnStrip::setFullscreen(WindowId window, bool fullscreen)
     cancelResizeForColumn(m_columns[colIndex]);
     if (fullscreen && m_columns[colIndex].tiles.size() > 1 && !m_columns[colIndex].isTabbed()) {
         consumeOrExpelWindowRight(window);
-        colIndex += 1;
+        colIndex = columnIndexOf(window);
     }
     m_columns[colIndex].setFullscreen(fullscreen);
     return true;
@@ -55,20 +55,10 @@ bool ColumnStrip::setMaximized(WindowId window, bool maximize)
     cancelResizeForColumn(m_columns[colIndex]);
     if (maximize && m_columns[colIndex].tiles.size() > 1 && !m_columns[colIndex].isTabbed()) {
         consumeOrExpelWindowRight(window);
-        colIndex += 1;
+        colIndex = columnIndexOf(window);
     }
     m_columns[colIndex].setMaximized(maximize);
     return true;
-}
-
-void ColumnStrip::toggleWidth(bool forwards, bool fromNative)
-{
-    if (m_columns.empty()) {
-        return;
-    }
-    Column &column = m_columns[m_activeColumnIndex];
-    column.toggleWidth(std::nullopt, forwards, fromNative);
-    cancelResizeForColumn(column);
 }
 
 void ColumnStrip::toggleFillWidth()
@@ -90,7 +80,6 @@ void ColumnStrip::toggleFillWidthAt(std::size_t idx)
     Column &column = m_columns[idx];
     column.toggleFillWidth();
     cancelResizeForColumn(column);
-    if (idx == m_activeColumnIndex) { }
 }
 
 void ColumnStrip::setWindowWidth(std::optional<WindowId> window, SizeChange change)
@@ -117,10 +106,10 @@ void ColumnStrip::resetWindowHeight(std::optional<WindowId> window)
     });
 }
 
-void ColumnStrip::toggleWindowWidth(std::optional<WindowId> window, bool forwards)
+void ColumnStrip::toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative)
 {
     withTargetColumn(m_columns, m_activeColumnIndex, window, [&](Column &column, std::optional<std::size_t> tileIndex) {
-        column.toggleWidth(tileIndex, forwards);
+        column.toggleWidth(tileIndex, forwards, fromNative);
         cancelResizeForColumn(column);
     });
 }

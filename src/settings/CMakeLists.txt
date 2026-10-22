@@ -1,12 +1,15 @@
-find_package(KF6 REQUIRED COMPONENTS CoreAddons Service)
+find_package(KF6 REQUIRED COMPONENTS CoreAddons Service Config)
 find_package(Qt6 REQUIRED COMPONENTS Quick GuiPrivate DBus)
 include(ECMQmlModule)
 
-ecm_add_qml_module(konveyor_settings URI "org.kde.konveyor.settings" GENERATE_PLUGIN_SOURCE NO_CACHEGEN)
-
-target_sources(konveyor_settings PRIVATE
+add_library(konveyor_settings_model STATIC
+    document/apprules.cpp
+    document/apprules.h
     document/configdocument.cpp
     document/configdocument.h
+    document/configdocumenttext.cpp
+    document/configmigration.cpp
+    document/configmigration.h
     document/nodecodec.cpp
     document/nodecodec.h
     document/nodepath.cpp
@@ -15,14 +18,8 @@ target_sources(konveyor_settings PRIVATE
     store/configfile.h
     store/edithistory.cpp
     store/edithistory.h
-    store/settingsnavigation.cpp
-    store/settingsnavigation.h
-    store/settingsstore.cpp
-    store/settingsstore.h
-    system/keynames.cpp
-    system/keynames.h
-    system/livesession.cpp
-    system/livesession.h
+    store/includeoverrides.cpp
+    store/includeoverrides.h
     values/configvalues.h
     values/globalvalues.cpp
     values/layoutvalues.cpp
@@ -30,6 +27,27 @@ target_sources(konveyor_settings PRIVATE
     values/livematching.h
     values/paintvalues.cpp
 )
+target_include_directories(konveyor_settings_model PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(konveyor_settings_model PUBLIC konveyor_config konveyor_layout Qt6::Core Qt6::Gui)
+target_compile_options(konveyor_settings_model PRIVATE -Wall -Wextra -Wpedantic -Werror)
+set_target_properties(konveyor_settings_model PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+ecm_add_qml_module(konveyor_settings URI "org.kde.konveyor.settings" GENERATE_PLUGIN_SOURCE NO_CACHEGEN)
+
+target_sources(konveyor_settings PRIVATE
+    store/settingsnavigation.cpp
+    store/settingsnavigation.h
+    store/settingsstore.cpp
+    store/settingsstore.h
+    store/taskbarsettings.cpp
+    store/taskbarsettings.h
+    system/keynames.cpp
+    system/keynames.h
+    system/livesession.cpp
+    system/livesession.h
+)
+
+qt_add_resources(konveyor_settings taskbar_schema PREFIX /konveyor BASE store FILES store/taskbar.kcfg)
 
 ecm_target_qml_sources(konveyor_settings SOURCES qml/PageFactory.js)
 ecm_target_qml_sources(konveyor_settings PATH catalog SOURCES
@@ -50,6 +68,7 @@ ecm_target_qml_sources(konveyor_settings PATH catalog/index SOURCES
     qml/catalog/index/MouseIndex.js
     qml/catalog/index/TouchIndex.js
     qml/catalog/index/PlasmaIndex.js
+    qml/catalog/index/TaskbarIndex.js
     qml/catalog/index/RulesIndex.js
     qml/catalog/index/ShortcutsIndex.js
     qml/catalog/index/WorkspacesIndex.js
@@ -90,6 +109,9 @@ ecm_target_qml_sources(konveyor_settings PATH components SOURCES
     qml/components/StatusMessages.qml
     qml/components/StrutsEditor.qml
     qml/components/SwitchRow.qml
+    qml/components/TaskbarChoiceRow.qml
+    qml/components/TaskbarSliderRow.qml
+    qml/components/TaskbarSwitchRow.qml
     qml/components/TabPositionPicker.qml
     qml/components/TriggerEditor.qml
     qml/components/TriState.qml
@@ -131,6 +153,7 @@ ecm_target_qml_sources(konveyor_settings PATH pages SOURCES
     qml/pages/PlasmaPage.qml
     qml/pages/RuleEditorPage.qml
     qml/pages/RulesPage.qml
+    qml/pages/TaskbarPage.qml
     qml/pages/ShortcutsPage.qml
     qml/pages/TouchPage.qml
     qml/pages/WorkspacesPage.qml
@@ -155,6 +178,11 @@ ecm_target_qml_sources(konveyor_settings PATH previews SOURCES
     qml/previews/ProfileGlance.qml
     qml/previews/StripPreview.qml
     qml/previews/TabIndicatorPreview.qml
+    qml/previews/MiniBadge.qml
+    qml/previews/MiniPill.qml
+    qml/previews/MiniTask.qml
+    qml/previews/MiniTaskbar.qml
+    qml/previews/TaskbarPreview.qml
     qml/previews/TitlebarDragDemo.qml
     qml/previews/WarpDemo.qml
     qml/previews/WorkspaceStack.qml
@@ -172,6 +200,10 @@ ecm_target_qml_sources(konveyor_settings PATH sections SOURCES
     qml/sections/ScopedSwitch.qml
     qml/sections/SizesSection.qml
     qml/sections/TabIndicatorSection.qml
+    qml/sections/TaskbarLookSection.qml
+    qml/sections/TaskbarPinsSection.qml
+    qml/sections/TaskbarWindowsSection.qml
+    qml/sections/TaskbarWorkspacesSection.qml
     qml/sections/TouchDeviceSection.qml
     qml/sections/ValueSlider.qml
 )
@@ -180,8 +212,11 @@ target_include_directories(konveyor_settings PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_compile_options(konveyor_settings PRIVATE -Wall -Wextra -Werror)
 target_link_options(konveyor_settings PRIVATE LINKER:--no-undefined)
 target_link_libraries(konveyor_settings PRIVATE
+    konveyor_settings_model
     konveyor_config
     konveyor_layout
+    KF6::ConfigGui
+    KF6::ConfigQml
     KF6::CoreAddons
     KF6::Service
     Qt6::Quick

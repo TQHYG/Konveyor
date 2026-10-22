@@ -250,6 +250,70 @@ private Q_SLOTS:
         QVERIFY(fixture.frame(id).width() > 300.0);
         VERIFY_INVARIANTS(fixture);
     }
+
+    void spaceLeftByAMaximumGoesToAWindowHeldAtItsMinimum()
+    {
+        Fixture fixture;
+        Layout::WindowProperties tall = makeWindow(QStringLiteral("tall"));
+        tall.minSize = QSizeF(0, 600);
+        const auto first = fixture.addWith(tall);
+        Layout::WindowProperties small = makeWindow(QStringLiteral("small"));
+        small.maxSize = QSizeF(0, 200);
+        const auto second = fixture.addWith(small);
+        fixture.perform(QStringLiteral("consume-or-expel-window-left"));
+        QCOMPARE(fixture.frame(second).height(), 200.0);
+        QCOMPARE(fixture.frame(first).height(), 1080.0 - 3 * 16.0 - 200.0);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void windowsAllAtTheirMaximumLeaveTheRestEmpty()
+    {
+        Fixture fixture;
+        Layout::WindowProperties small = makeWindow(QStringLiteral("small"));
+        small.maxSize = QSizeF(0, 300);
+        const auto first = fixture.addWith(small);
+        const auto second = fixture.addWith(small);
+        const auto third = fixture.addWith(small);
+        fixture.perform(QStringLiteral("consume-or-expel-window-left"));
+        fixture.perform(QStringLiteral("focus-column-left"));
+        fixture.perform(QStringLiteral("consume-or-expel-window-left"));
+        for (const auto id : {first, second, third}) {
+            QCOMPARE(fixture.frame(id).height(), 300.0);
+        }
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void minimumHeightWinsOverASmallerMaximum()
+    {
+        Fixture fixture;
+        Layout::WindowProperties properties = makeWindow(QStringLiteral("odd"));
+        properties.minSize = QSizeF(0, 600);
+        properties.maxSize = QSizeF(0, 400);
+        const auto id = fixture.addWith(properties);
+        QCOMPARE(fixture.frame(id).height(), 600.0);
+        VERIFY_INVARIANTS(fixture);
+    }
+    void centeredTabbedColumnKeepsItsTabsBesideTheWindows()
+    {
+        Config::Config config = instantConfig();
+        config.layout.centerFocusedColumn = Config::CenterFocusedColumn::Always;
+        config.layout.tabIndicator.placeWithinColumn = true;
+        config.layout.tabIndicator.width = 10;
+        config.layout.tabIndicator.gap = 4;
+        Fixture fixture(config);
+        const auto first = fixture.add(QStringLiteral("a"));
+        const auto second = fixture.add(QStringLiteral("b"));
+        const auto third = fixture.add(QStringLiteral("c"));
+        fixture.perform(QStringLiteral("consume-or-expel-window-left"));
+        QVERIFY(fixture.perform(QStringLiteral("toggle-column-tabbed-display")).ok);
+        const auto last = fixture.add(QStringLiteral("d"));
+        fixture.perform(QStringLiteral("focus-column-left"));
+        fixture.advance(1);
+        QCOMPARE(fixture.frame(third).left(), fixture.frame(first).right() + 16.0 + 14.0);
+        QCOMPARE(fixture.frame(second).left(), fixture.frame(third).left());
+        QCOMPARE(fixture.frame(last).left(), fixture.frame(third).right() + 16.0);
+        VERIFY_INVARIANTS(fixture);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestLayoutColumns)

@@ -1,0 +1,372 @@
+#include "launcherharness.h"
+
+namespace
+{
+
+QVariantMap window(const QString &title, const QString &appName, const QString &appId, const QVariantMap &extra = {})
+{
+    QVariantMap row {{QStringLiteral("display"), title}, {QStringLiteral("AppName"), appName}, {QStringLiteral("AppId"), appId},
+        {QStringLiteral("decoration"), QStringLiteral("text-plain")}};
+    row.insert(extra);
+    return row;
+}
+
+const QVariantMap onlyWindowResults {
+    {QStringLiteral("searchCalculator"), false}, {QStringLiteral("searchCommands"), false}, {QStringLiteral("searchPackages"), false}};
+
+const QVariantList openWindows {
+    window(QStringLiteral("notes.txt"), QStringLiteral("KWrite"), QStringLiteral("org.kde.kwrite.desktop"),
+        {{QStringLiteral("GenericName"), QStringLiteral("Text Editor")}}),
+    window(QStringLiteral("main.cpp - Konveyor"), QStringLiteral("Zed"), QStringLiteral("dev.zed.Zed.desktop"),
+        {{QStringLiteral("GenericName"), QStringLiteral("Code Editor")}, {QStringLiteral("IsMinimized"), true}}),
+    window(QStringLiteral("Starting Firefox"), QStringLiteral("Firefox"), QStringLiteral("firefox.desktop"),
+        {{QStringLiteral("IsWindow"), false}}),
+};
+
+}
+
+class TestLauncherWindowsQml : public LauncherTest::TestCase
+{
+    Q_OBJECT
+
+private:
+    QObject *fixture() { return m_harness.singleton("org.kde.taskmanager", "TaskFixture"); }
+
+    QObject *openWithWindows(const QVariantMap &settings = {})
+    {
+        fixture()->setProperty("windows", openWindows);
+        return m_harness.openHost(false, settings);
+    }
+
+    QStringList shown()
+    {
+        return results(QStringLiteral("sections.filter(g => g && g.visible).map(g => {"
+                                      "  const out = [];"
+                                      "  for (let i = 0; i < g.shownCount; ++i) { const t = g.itemAtIndex(i); out.push(t ? t.label : '') }"
+                                      "  return out.join('|') })"))
+            .toStringList();
+    }
+
+    bool windowRows(int count)
+    {
+        return QTest::qWaitFor(
+            [this, count] {
+                return onPage(
+                    QStringLiteral(
+                        "p.windowSection && p.windowSection.grid.count === %1 && p.windowSection.grid.itemAtIndex(%1 - 1) !== null")
+                        .arg(count))
+                    .toBool();
+            },
+            30000);
+    }
+
+    QObject *pressEnterBeforeAnyResult()
+    {
+        fixture()->setProperty("windows", QVariantList());
+        QObject *host = m_harness.openHost(false, onlyWindowResults);
+        if (!host || !QTest::qWaitFor([this] { return eval(QStringLiteral("field.activeFocus")).toBool(); }, 30000)
+            || !search(QStringLiteral("dev.zed"))
+            || !QTest::qWaitFor([this] { return !eval(QStringLiteral("launcherData.runner.querying")).toBool(); }, 30000)
+            || results(QStringLiteral("totalResults")).toInt() != 0) {
+            return nullptr;
+        }
+        QTest::keyClick(m_harness.window(), Qt::Key_Return);
+        return host;
+    }
+
+    QVariant onPage(const QString &expression) { return eval(QStringLiteral("(p => %1)(searchLoader.item)").arg(expression)); }
+
+    QString windowSection()
+    {
+        return onPage(QStringLiteral("p.windowSection && p.windowSection.visible ? p.windowSection.title : ''")).toString();
+    }
+
+private Q_SLOTS:
+    void searchingAnOpenAppListsItsWindows_data()
+    {
+        QTest::addColumn<QString>("text");
+        QTest::addColumn<QStringList>("titles");
+        QTest::newRow("app name") << QStringLiteral("kwrite") << QStringList {QStringLiteral("notes.txt")};
+        QTest::newRow("app name, other case") << QStringLiteral("ZED") << QStringList {QStringLiteral("main.cpp - Konveyor")};
+        QTest::newRow("generic name") << QStringLiteral("text editor") << QStringList {QStringLiteral("notes.txt")};
+        QTest::newRow("window title") << QStringLiteral("main.cpp") << QStringList {QStringLiteral("main.cpp - Konveyor")};
+        QTest::newRow("app id") << QStringLiteral("dev.zed") << QStringList {QStringLiteral("main.cpp - Konveyor")};
+        QTest::newRow("both editors") << QStringLiteral("editor")
+                                      << QStringList {QStringLiteral("notes.txt"), QStringLiteral("main.cpp - Konveyor")};
+        QTest::newRow("a starting app is no window") << QStringLiteral("firefox") << QStringList();
+        QTest::newRow("nothing open matches") << QStringLiteral("dolphin") << QStringList();
+    }
+
+    void searchingAnOpenAppListsItsWindows()
+    {
+        QFETCH(QString, text);
+        QFETCH(QStringList, titles);
+        QVERIFY(openWithWindows());
+        QVERIFY(search(text));
+        TRY_COMPARE(results(QStringLiteral("windowMatches.map(w => w.title)")).toStringList(), titles);
+        if (titles.isEmpty()) {
+            QVERIFY(windowSection().isEmpty());
+            return;
+        }
+        QCOMPARE(windowSection(), QStringLiteral("Open windows"));
+        TRY_VERIFY(shown().contains(titles.join(QLatin1Char('|'))));
+    }
+
+    void activatingAWindowSwitchesToItAndCloses()
+    {
+        QObject *host = openWithWindows();
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("dev.zed")));
+        QVERIFY(windowRows(1));
+        eval(QStringLiteral("launcher.select(searchLoader.item.windowSection.grid, 0); launcher.activateCurrent()"));
+        TRY_COMPARE(host->property("hideCount").toInt(), 1);
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(),
+            QStringList {QStringLiteral("main.cpp - Konveyor")});
+    }
+
+    void enterBeforeAnyResultShowsOpensTheFirstOnceItDoes()
+    {
+        QObject *host = pressEnterBeforeAnyResult();
+        QVERIFY(host);
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+        fixture()->setProperty("windows", openWindows);
+        TRY_COMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(),
+            QStringList {QStringLiteral("main.cpp - Konveyor")});
+        QCOMPARE(host->property("hideCount").toInt(), 1);
+    }
+
+    void typingAgainDropsAnEnterThatFoundNothing()
+    {
+        QObject *host = pressEnterBeforeAnyResult();
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("dev.ze")));
+        fixture()->setProperty("windows", openWindows);
+        QVERIFY(windowRows(1));
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(), QStringList());
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+    }
+
+    void enterDuringAQueryDoesNotOpenAnOldApp_data()
+    {
+        QTest::addColumn<bool>("typeAgain");
+        QTest::newRow("finish activates the current window") << false;
+        QTest::newRow("typing again cancels pending activation") << true;
+    }
+
+    void enterRunsItsCompletedSourceWhileOtherRunnersAreBusy()
+    {
+        QObject *host = openWithWindows(onlyWindowResults);
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("kon")));
+        TRY_VERIFY(eval(QStringLiteral("launcher.currentSection() && launcher.currentSection().currentItem && "
+                                       "launcher.currentSection().currentItem.label === 'Konsole'"))
+                .toBool());
+        QObject *group = eval(QStringLiteral("launcherData.runner.modelForRow(0)")).value<QObject *>();
+        QVERIFY(group);
+        eval(QStringLiteral("launcherData.runner.querying = true"));
+        group->setProperty("queryString", QStringLiteral("old query"));
+        QTest::keyClick(m_harness.window(), Qt::Key_Return);
+        QCoreApplication::processEvents();
+        QVERIFY(eval(QStringLiteral("launcher.activationPending")).toBool());
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+        QCOMPARE(eval(QStringLiteral("launcherData.runner.modelForRow(0).triggered.length")).toInt(), 0);
+        group->setProperty("querying", true);
+        group->setProperty("queryString", QStringLiteral("kon"));
+        QCoreApplication::processEvents();
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+        group->setProperty("querying", false);
+        TRY_COMPARE(host->property("hideCount").toInt(), 1);
+        QCOMPARE(eval(QStringLiteral("launcherData.runner.querying")).toBool(), true);
+        QCOMPARE(eval(QStringLiteral("launcherData.runner.modelForRow(0).triggered.length")).toInt(), 1);
+        QCOMPARE(eval(QStringLiteral("launcherData.runner.modelForRow(0).triggered[0].favoriteId")).toString(),
+            QStringLiteral("org.kde.konsole.desktop"));
+        QVERIFY(!eval(QStringLiteral("launcher.activationPending")).toBool());
+    }
+
+    void enterRunsALocalWindowWhileRunnersAreBusy()
+    {
+        QObject *host = openWithWindows(onlyWindowResults);
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("dev.zed")));
+        QVERIFY(windowRows(1));
+        TRY_VERIFY(eval(QStringLiteral("launcher.currentSection() && launcher.currentSection().currentItem && "
+                                       "launcher.currentSection().currentItem.label === 'main.cpp - Konveyor'"))
+                .toBool());
+        QVERIFY(eval(QStringLiteral("launcher.currentSection().currentItem.sourceModel === undefined")).toBool());
+        eval(QStringLiteral("launcherData.runner.querying = true"));
+        QTest::keyClick(m_harness.window(), Qt::Key_Return);
+        TRY_COMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(),
+            QStringList {QStringLiteral("main.cpp - Konveyor")});
+        QCOMPARE(host->property("hideCount").toInt(), 1);
+        QVERIFY(eval(QStringLiteral("launcherData.runner.querying")).toBool());
+        QVERIFY(!eval(QStringLiteral("launcher.activationPending")).toBool());
+    }
+
+    void enterDuringAQueryDoesNotOpenAnOldApp()
+    {
+        QFETCH(bool, typeAgain);
+        QObject *host = openWithWindows(onlyWindowResults);
+        QVERIFY(host);
+        const QString selectedLabel
+            = QStringLiteral("(section => section && section.currentItem ? section.currentItem.label : '')(launcher.currentSection())");
+        QVERIFY(search(QStringLiteral("kon")));
+        TRY_COMPARE(eval(selectedLabel).toString(), QStringLiteral("Konsole"));
+        eval(QStringLiteral("launcherData.runner.deferQueries = true"));
+        QVERIFY(search(QStringLiteral("dev.zed")));
+        QVERIFY(eval(QStringLiteral("launcherData.runner.querying")).toBool());
+        TRY_COMPARE(eval(selectedLabel).toString(), QStringLiteral("Konsole"));
+        QTest::keyClick(m_harness.window(), Qt::Key_Return);
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+        QVERIFY(eval(QStringLiteral("launcher.activationPending")).toBool());
+        QCOMPARE(eval(QStringLiteral("launcherData.runner.modelForRow(0).triggered.length")).toInt(), 0);
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(), QStringList());
+        if (typeAgain) {
+            QVERIFY(search(QStringLiteral("dev.ze")));
+            QVERIFY(!eval(QStringLiteral("launcher.activationPending")).toBool());
+        }
+        eval(QStringLiteral("launcherData.runner.rebuild()"));
+        QVERIFY(windowRows(1));
+        if (typeAgain) {
+            QCOMPARE(host->property("hideCount").toInt(), 0);
+            QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(), QStringList());
+            QTest::keyClick(m_harness.window(), Qt::Key_Return);
+        }
+        TRY_COMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(),
+            QStringList {QStringLiteral("main.cpp - Konveyor")});
+        QCOMPARE(host->property("hideCount").toInt(), 1);
+        QVERIFY(!eval(QStringLiteral("launcher.activationPending")).toBool());
+    }
+
+    void clickingAWindowSwitchesToIt()
+    {
+        QObject *host = openWithWindows();
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("notes")));
+        QVERIFY(windowRows(1));
+        eval(QStringLiteral("searchLoader.item.windowSection.grid.itemAtIndex(0).clicked()"));
+        QCOMPARE(host->property("hideCount").toInt(), 1);
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(), QStringList {QStringLiteral("notes.txt")});
+    }
+
+    void aWindowsMenuSwitchesToOrClosesIt()
+    {
+        QObject *host = openWithWindows();
+        QVERIFY(host);
+        QVERIFY(search(QStringLiteral("notes")));
+        QVERIFY(windowRows(1));
+        eval(QStringLiteral("launcher.select(searchLoader.item.windowSection.grid, 0); launcher.menuForCurrent()"));
+        QCOMPARE(eval(QStringLiteral("menu.entries.map(e => e.text)")).toStringList(),
+            QStringList({QStringLiteral("Switch to window"), QStringLiteral("Close window")}));
+        eval(QStringLiteral("menu.entries[1].run()"));
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.closed")).toStringList(), QStringList {QStringLiteral("notes.txt")});
+        QCOMPARE(host->property("hideCount").toInt(), 0);
+        eval(QStringLiteral("menu.entries[0].run()"));
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.activated")).toStringList(), QStringList {QStringLiteral("notes.txt")});
+        QCOMPARE(host->property("hideCount").toInt(), 1);
+    }
+
+    void aWindowRowNamesItsAppAndWhetherItIsMinimized()
+    {
+        QVERIFY(openWithWindows());
+        QVERIFY(search(QStringLiteral("editor")));
+        QVERIFY(windowRows(2));
+        const QString row = QStringLiteral("windowSection.grid.itemAtIndex(%1).");
+        QCOMPARE(results(row.arg(0) + QStringLiteral("subtitle")).toString(), QStringLiteral("KWrite"));
+        QCOMPARE(results(row.arg(1) + QStringLiteral("subtitle")).toString(), QStringLiteral("Zed · minimized"));
+        QCOMPARE(results(row.arg(0) + QStringLiteral("iconSource")).toString(), QStringLiteral("text-plain"));
+        QCOMPARE(results(row.arg(0) + QStringLiteral("query")).toString(), QStringLiteral("editor"));
+    }
+
+    void windowsFollowOpeningAndClosingWhileSearching()
+    {
+        QVERIFY(openWithWindows());
+        QVERIFY(search(QStringLiteral("editor")));
+        TRY_COMPARE(results(QStringLiteral("windowMatches.length")).toInt(), 2);
+        fixture()->setProperty("windows", QVariantList {openWindows.at(1)});
+        TRY_COMPARE(
+            results(QStringLiteral("windowMatches.map(w => w.title)")).toStringList(), QStringList {QStringLiteral("main.cpp - Konveyor")});
+        fixture()->setProperty("windows", QVariantList());
+        TRY_COMPARE(results(QStringLiteral("windowMatches.length")).toInt(), 0);
+        TRY_VERIFY(windowSection().isEmpty());
+    }
+
+    void windowsStayOutWhenTurnedOff()
+    {
+        QVERIFY(openWithWindows({{QStringLiteral("searchWindows"), false}}));
+        QVERIFY(search(QStringLiteral("kwrite")));
+        QCOMPARE(results(QStringLiteral("windowMatches.length")).toInt(), 0);
+        QVERIFY(windowSection().isEmpty());
+        m_harness.config()->insert(QStringLiteral("searchWindows"), true);
+        TRY_COMPARE(results(QStringLiteral("windowMatches.length")).toInt(), 1);
+    }
+
+    void theResultCountIncludesWindows()
+    {
+        QVERIFY(openWithWindows());
+        QVERIFY(search(QStringLiteral("editor")));
+        QVERIFY(windowRows(2));
+        TRY_VERIFY(!eval(QStringLiteral("launcherData.runner.querying")).toBool());
+        const int with = results(QStringLiteral("totalResults")).toInt();
+        m_harness.config()->insert(QStringLiteral("searchWindows"), false);
+        TRY_COMPARE(results(QStringLiteral("totalResults")).toInt(), with - 2);
+    }
+
+    void onlyTheAllModeListsWindows_data()
+    {
+        QTest::addColumn<QString>("text");
+        for (const char *prefix : {"a ", "f ", "g ", "s ", "@", "=", ">"}) {
+            QTest::newRow(prefix) << QLatin1String(prefix) + QStringLiteral("kwrite");
+        }
+    }
+
+    void onlyTheAllModeListsWindows()
+    {
+        QFETCH(QString, text);
+        QVERIFY(openWithWindows());
+        QVERIFY(search(text));
+        QCOMPARE(results(QStringLiteral("windowMatches.length")).toInt(), 0);
+    }
+
+    void theWindowRunnerIsNotAskedTwice()
+    {
+        QVERIFY(openWithWindows());
+        QVERIFY(search(QStringLiteral("kwrite")));
+        QVERIFY(!eval(QStringLiteral("launcherData.runner.runners")).toStringList().contains(QStringLiteral("windows")));
+    }
+
+    void theWindowSourceSeesEveryWindow()
+    {
+        QVERIFY(openWithWindows());
+        QCOMPARE(eval(QStringLiteral("launcherData.windows.tasks.groupMode")).toInt(), 0);
+        for (const char *filter : {"filterByVirtualDesktop", "filterByScreen", "filterByActivity", "filterNotMinimized"}) {
+            QVERIFY2(!eval(QStringLiteral("launcherData.windows.tasks.") + QLatin1String(filter)).toBool(), filter);
+        }
+    }
+
+    void windowsFollowTheResultOrder_data()
+    {
+        QTest::addColumn<QString>("order");
+        QTest::addColumn<bool>("windowsFirst");
+        QTest::newRow("windows first") << QStringLiteral("windows,apps") << true;
+        QTest::newRow("windows after apps") << QStringLiteral("apps,windows") << false;
+    }
+
+    void windowsFollowTheResultOrder()
+    {
+        QFETCH(QString, order);
+        QFETCH(bool, windowsFirst);
+        m_harness.respondWithLibrary();
+        QVERIFY(openWithWindows({{QStringLiteral("searchOrder"), order}}));
+        QVERIFY(search(QStringLiteral("o")));
+        TRY_VERIFY(results(QStringLiteral("windowSection.grid.count")).toInt() > 0);
+        TRY_VERIFY(onPage(QStringLiteral("p.sections.indexOf(p.windowSection.grid) > 1")).toBool());
+        const QString apps = QStringLiteral("p.sections.findIndex(g => g && g.visible && g.count > 0 && g !== p.sections[0] "
+                                            "&& g !== p.sections[1] && g !== p.windowSection.grid)");
+        TRY_VERIFY(onPage(apps + QStringLiteral(" >= 0")).toBool());
+        const int windows = onPage(QStringLiteral("p.sections.indexOf(p.windowSection.grid)")).toInt();
+        QCOMPARE(windows < onPage(apps).toInt(), windowsFirst);
+    }
+};
+
+LAUNCHER_TEST_MAIN(TestLauncherWindowsQml)
+#include "test_launcher_windows_qml.moc"

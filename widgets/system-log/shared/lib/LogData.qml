@@ -11,10 +11,12 @@ Item {
     property var lines: []
     property double ts: 0
     property bool online: false
+    property string error: ""
     property bool ready: false
     signal updated()
 
     property string cachePath: ""
+    readonly property int staleSeconds: 15
 
     P5Support.DataSource {
         id: helper
@@ -41,14 +43,26 @@ Item {
             try {
                 var parsed = JSON.parse(xhr.responseText)
                 root.ts = parsed.ts || 0
-                root.online = parsed.alive !== false
-                    && (Date.now() / 1000 - root.ts) < 15
+                root.error = parsed.error || ""
+                var age = Date.now() / 1000 - root.ts
+                root.online = parsed.alive !== false && age < root.staleSeconds
+                if (root.online) {
+                    stale.interval = Math.ceil((root.staleSeconds - age) * 1000)
+                    stale.restart()
+                } else {
+                    stale.stop()
+                }
                 root.lines = parsed.lines || []
                 root.ready = true
                 root.updated()
             } catch (e) {}
         }
         xhr.send()
+    }
+
+    Timer {
+        id: stale
+        onTriggered: root.online = false
     }
 
     FileWatcher { path: root.active ? root.cachePath : ""; onChanged: root.read() }

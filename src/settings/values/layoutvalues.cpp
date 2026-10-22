@@ -59,6 +59,8 @@ QVariantMap layoutValues(const Config::Layout &layout)
         {QStringLiteral("always-center-single-column"), layout.alwaysCenterSingleColumn},
         {QStringLiteral("always-expand-single-column"), layout.alwaysExpandSingleColumn},
         {QStringLiteral("empty-workspace-above-first"), layout.emptyWorkspaceAboveFirst},
+        {QStringLiteral("fixed-workspace-count"), layout.fixedWorkspaceCount},
+        {QStringLiteral("horizontal-desktops"), layout.horizontalDesktops},
         {QStringLiteral("remember-window-sizes"), layout.rememberWindowSizes},
         {QStringLiteral("remember-window-positions"), layout.rememberWindowPositions},
         {QStringLiteral("group-app-windows"), groupModes.at(static_cast<qsizetype>(layout.groupAppWindows))},
@@ -86,28 +88,6 @@ QVariantMap layoutValues(const Config::Layout &layout)
                 {QStringLiteral("enabled"), layout.insertHint.enabled}, {QStringLiteral("paint"), paintValue(layout.insertHint.paint)}}},
         {QStringLiteral("background-color"), colorValue(layout.backgroundColor)},
     };
-}
-
-Config::Layout scopedLayout(const Config::Config &config, const QString &kind, const QString &name)
-{
-    const auto layoutOf = [&name, &config](const auto &list) {
-        for (const auto &entry : list) {
-            if (entry.name == name && entry.layout) {
-                return *entry.layout;
-            }
-        }
-        return config.layout;
-    };
-    if (kind == QLatin1String("output")) {
-        return layoutOf(config.outputs);
-    }
-    if (kind == QLatin1String("monitor-profile")) {
-        return layoutOf(config.monitorProfiles);
-    }
-    if (kind == QLatin1String("workspace")) {
-        return layoutOf(config.workspaces);
-    }
-    return config.layout;
 }
 
 }

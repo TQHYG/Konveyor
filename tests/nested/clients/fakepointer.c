@@ -68,10 +68,44 @@ static void touch_gesture(struct wl_display *display, int fingers, double x, dou
     touch_frame(display);
 }
 
+static int send_event(struct wl_display *display, const char *token)
+{
+    unsigned int code = 0;
+    unsigned int state = 0;
+    double value = 0;
+    double y = 0;
+    if (sscanf(token, "move:%lf:%lf", &value, &y) == 2) {
+        org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(value), wl_fixed_from_double(y));
+    } else if (sscanf(token, "axis:%u:%lf", &code, &value) == 2) {
+        org_kde_kwin_fake_input_axis(fake, code, wl_fixed_from_double(value));
+    } else if (sscanf(token, "button:%u:%u", &code, &state) == 2) {
+        org_kde_kwin_fake_input_button(fake, code, state);
+    } else if (sscanf(token, "touchdown:%u:%lf:%lf", &code, &value, &y) == 3) {
+        org_kde_kwin_fake_input_touch_down(fake, code, wl_fixed_from_double(value), wl_fixed_from_double(y));
+        org_kde_kwin_fake_input_touch_frame(fake);
+    } else if (sscanf(token, "touchmotion:%u:%lf:%lf", &code, &value, &y) == 3) {
+        org_kde_kwin_fake_input_touch_motion(fake, code, wl_fixed_from_double(value), wl_fixed_from_double(y));
+        org_kde_kwin_fake_input_touch_frame(fake);
+    } else if (sscanf(token, "touchup:%u", &code) == 1) {
+        org_kde_kwin_fake_input_touch_up(fake, code);
+        org_kde_kwin_fake_input_touch_frame(fake);
+    } else if (strcmp(token, "touchcancel") == 0) {
+        org_kde_kwin_fake_input_touch_cancel(fake);
+    } else if (sscanf(token, "%u:%u", &code, &state) == 2) {
+        org_kde_kwin_fake_input_keyboard_key(fake, code, state);
+    } else {
+        fprintf(stderr, "fakepointer: events are CODE:STATE, button:CODE:STATE, axis:AXIS:VALUE, move:X:Y, touchdown:ID:X:Y, "
+                        "touchmotion:ID:X:Y, touchup:ID or touchcancel\n");
+        return 0;
+    }
+    wl_display_roundtrip(display);
+    return 1;
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 4) {
-        fprintf(stderr, "usage: fakepointer move|click X Y | touch FINGERS X Y DX DY R0 R1 HOLD_MS STEPS\n");
+    if (argc < 2 || (argc < 3 && strcmp(argv[1], "stdin") != 0)) {
+        fprintf(stderr, "usage: fakepointer move|click|press|release X Y | keys EVENT... | stdin | touch FINGERS X Y DX DY R0 R1 HOLD_MS STEPS\n");
         return 2;
     }
     const int touch = strcmp(argv[1], "touch") == 0;
@@ -92,6 +126,28 @@ int main(int argc, char **argv)
         return 1;
     }
     org_kde_kwin_fake_input_authenticate(fake, "konveyor-tests", "nested input");
+    if (strcmp(argv[1], "keys") == 0) {
+        for (int i = 2; i < argc; ++i) {
+            if (!send_event(display, argv[i])) {
+                return 2;
+            }
+        }
+        wl_display_disconnect(display);
+        return 0;
+    }
+    if (strcmp(argv[1], "stdin") == 0) {
+        char line[256];
+        while (fgets(line, sizeof line, stdin)) {
+            line[strcspn(line, "\n")] = 0;
+            if (!send_event(display, line)) {
+                return 2;
+            }
+            printf("done\n");
+            fflush(stdout);
+        }
+        wl_display_disconnect(display);
+        return 0;
+    }
     if (touch) {
         const int fingers = atoi(argv[2]);
         if (fingers < 1 || fingers > 10) {
@@ -102,10 +158,18 @@ int main(int argc, char **argv)
         wl_display_disconnect(display);
         return 0;
     }
+    if (argc < 4) {
+        fprintf(stderr, "usage: fakepointer move|click|press|release X Y\n");
+        return 2;
+    }
     org_kde_kwin_fake_input_pointer_motion_absolute(fake, wl_fixed_from_double(atof(argv[2])), wl_fixed_from_double(atof(argv[3])));
     wl_display_roundtrip(display);
+    const uint32_t leftButton = 0x110;
+    if (strcmp(argv[1], "press") == 0 || strcmp(argv[1], "release") == 0) {
+        org_kde_kwin_fake_input_button(fake, leftButton, strcmp(argv[1], "press") == 0);
+        wl_display_roundtrip(display);
+    }
     if (strcmp(argv[1], "click") == 0) {
-        const uint32_t leftButton = 0x110;
         const useconds_t settle = 50000;
         usleep(settle);
         org_kde_kwin_fake_input_button(fake, leftButton, 1);

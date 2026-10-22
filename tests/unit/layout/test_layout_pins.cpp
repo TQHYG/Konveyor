@@ -120,6 +120,54 @@ private Q_SLOTS:
         QCOMPARE(rowOrder(fixture, {first, later}), (QList<Layout::WindowId> {later, first}));
         VERIFY_INVARIANTS(fixture);
     }
+
+    void swappingAPinnedWindowIntoAnotherColumnKeepsBothWindows()
+    {
+        Fixture fixture(pinnedConfig(instantConfig(), QStringLiteral("pinned"), Config::ColumnPosition::End));
+        const auto first = fixture.add(QStringLiteral("a"));
+        const auto second = fixture.add(QStringLiteral("b"));
+        const auto pinned = fixture.add(QStringLiteral("pinned"));
+        fixture.perform(QStringLiteral("consume-or-expel-window-left"));
+        QCOMPARE(fixture.state(pinned).columnIndex, fixture.state(second).columnIndex);
+        QCOMPARE(fixture.focused(), std::optional(pinned));
+        fixture.perform(QStringLiteral("swap-window-left"));
+        QCOMPARE(fixture.focused(), std::optional(pinned));
+        QCOMPARE(fixture.state(pinned).columnIndex, 1);
+        QCOMPARE(fixture.state(pinned).tileIndex, 0);
+        QCOMPARE(fixture.state(second).columnIndex, 0);
+        QCOMPARE(fixture.state(first).columnIndex, 0);
+        QCOMPARE(fixture.state(first).tileIndex, 1);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void pinningOnReloadKeepsTheRowInView()
+    {
+        Fixture fixture(instantConfig());
+        fixture.add(QStringLiteral("a"));
+        const auto later = fixture.add(QStringLiteral("pinned"));
+        fixture.setConfig(leftConfig());
+        QCOMPARE(fixture.frame(later).x(), 16.0);
+        QCOMPARE(fixture.focused(), std::optional(later));
+    }
+    void columnThatLosesItsPinnedWindowLeavesThePinnedEnd()
+    {
+        Config::Config config = pinnedConfig(instantConfig(), QStringLiteral("pinned"), Config::ColumnPosition::End);
+        config.layout.newWindowPlacement = Config::NewWindowPlacement::Stack;
+        config.layout.maxRowsPerColumn = 2;
+        Fixture fixture(config);
+        const auto host = fixture.add(QStringLiteral("pinned"));
+        Client unchanging;
+        unchanging.fixedSize = QSizeF(500, 400);
+        const auto guest = fixture.addClient(makeWindow(QStringLiteral("guest")), unchanging);
+        const auto other = fixture.add(QStringLiteral("pinned"));
+        QCOMPARE(fixture.state(guest).columnIndex, fixture.state(host).columnIndex);
+        fixture.engine().activateWindow(host);
+        QVERIFY(fixture.perform(QStringLiteral("move-column-right")).ok);
+        QCOMPARE(rowOrder(fixture, {host, other}), (QList<Layout::WindowId> {other, host}));
+        fixture.remove(host);
+        QCOMPARE(rowOrder(fixture, {guest, other}), (QList<Layout::WindowId> {guest, other}));
+        VERIFY_INVARIANTS(fixture);
+    }
 };
 
 QTEST_GUILESS_MAIN(TestLayoutPins)

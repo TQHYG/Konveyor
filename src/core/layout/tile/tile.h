@@ -98,8 +98,10 @@ public:
 
     void requestOuterSize(QSizeF size, bool animate);
     void requestMaximized(QSizeF size, bool animate);
+    void clearWindowedFullscreenFallback();
     void requestFullscreen(bool animate);
     double outerWidthFor(double size) const;
+    ColumnWidth columnWidthFor(const Config::PresetSize &preset) const;
     double outerHeightFor(double size) const;
     double innerWidthFor(double size) const;
     double innerHeightFor(double size) const;
@@ -107,10 +109,12 @@ public:
     QSizeF maxNormalSize() const;
 
     bool returnsToFloating = false;
+    bool isWindowedFullscreenFallback = false;
     std::optional<QSize> savedFloatingSize;
     std::optional<QPointF> savedFloatingPosition;
     std::optional<std::size_t> floatingWidthPresetIndex;
     std::optional<std::size_t> floatingHeightPresetIndex;
+    std::optional<CarriedHeight> carriedHeight;
     QPointF dragOffset;
 
 private:

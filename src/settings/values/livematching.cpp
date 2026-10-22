@@ -1,5 +1,6 @@
 #include "values/livematching.h"
 
+#include "config/loader.h"
 #include "layout/monitor/monitorprofiles.h"
 #include "layout/rules/windowrules.h"
 
@@ -9,23 +10,85 @@ namespace Konveyor::Settings
 namespace
 {
 
-QString profileForWorkspace(
-    const Config::Config &config, const QVariant &workspaceId, const QVariantList &workspaces, const QVariantList &outputs)
+QString outputOfWorkspaceId(const QVariant &workspaceId, const QVariantList &workspaces)
 {
     for (const QVariant &workspace : workspaces) {
         const QVariantMap entry = workspace.toMap();
-        if (entry.value(QStringLiteral("id")) != workspaceId) {
-            continue;
-        }
-        for (const QVariant &output : outputs) {
-            if (output.toMap().value(QStringLiteral("name")) == entry.value(QStringLiteral("output"))) {
-                return profileNameFor(config, output.toMap());
-            }
+        if (entry.value(QStringLiteral("id")) == workspaceId) {
+            return entry.value(QStringLiteral("output")).toString();
         }
     }
     return QString();
 }
 
+QString profileForOutput(const Config::Config &config, const QString &name, const QVariantList &outputs)
+{
+    for (const QVariant &output : outputs) {
+        if (!name.isEmpty() && output.toMap().value(QStringLiteral("name")) == name) {
+            return profileNameFor(config, output.toMap());
+        }
+    }
+    return QString();
+}
+
+template<typename Entry> const Entry *entryNamed(const QList<Entry> &entries, const QString &name, Qt::CaseSensitivity sensitivity)
+{
+    const auto found = std::ranges::find_if(entries, [&](const Entry &entry) { return entry.name.compare(name, sensitivity) == 0; });
+    return found == entries.end() ? nullptr : &*found;
+}
+
+Config::Layout withPart(const Config::Layout &layout, const std::optional<Config::LayoutPart> &part)
+{
+    return part ? Config::mergedLayout(layout, *part) : layout;
+}
+
+Config::Layout outputLayout(const Config::Config &config, const QString &name, const QVariantList &outputs)
+{
+    Config::Layout layout = config.layout;
+    for (const QVariant &output : outputs) {
+        if (output.toMap().value(QStringLiteral("name")).toString().compare(name, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        if (const auto *profile = entryNamed(config.monitorProfiles, profileNameFor(config, output.toMap()), Qt::CaseSensitive)) {
+            layout = withPart(layout, profile->layout);
+        }
+    }
+    const auto *entry = entryNamed(config.outputs, name, Qt::CaseInsensitive);
+    return entry ? withPart(layout, entry->layout) : layout;
+}
+
+QString outputOfWorkspace(const Config::NamedWorkspace &named, const QVariantList &workspaces)
+{
+    for (const QVariant &workspace : workspaces) {
+        const QVariantMap entry = workspace.toMap();
+        if (entry.value(QStringLiteral("name")).toString().compare(named.name, Qt::CaseInsensitive) == 0) {
+            return entry.value(QStringLiteral("output")).toString();
+        }
+    }
+    return named.openOnOutput.value_or(QString());
+}
+
+}
+
+Config::Layout scopedLayout(
+    const Config::Config &config, const QString &kind, const QString &name, const QVariantList &outputs, const QVariantList &workspaces)
+{
+    if (kind == QLatin1String("output")) {
+        return outputLayout(config, name, outputs);
+    }
+    if (kind == QLatin1String("monitor-profile")) {
+        const auto *profile = entryNamed(config.monitorProfiles, name, Qt::CaseSensitive);
+        return profile ? withPart(config.layout, profile->layout) : config.layout;
+    }
+    if (kind == QLatin1String("workspace")) {
+        const auto *named = entryNamed(config.workspaces, name, Qt::CaseInsensitive);
+        if (!named) {
+            return config.layout;
+        }
+        const QString output = outputOfWorkspace(*named, workspaces);
+        return withPart(output.isEmpty() ? config.layout : outputLayout(config, output, outputs), named->layout);
+    }
+    return config.layout;
 }
 
 QString profileNameFor(const Config::Config &config, const QVariantMap &output)
@@ -49,7 +112,8 @@ QVariantList windowsMatchingRule(const Config::Config &config, const Config::Win
         context.isActive = context.isFocused;
         context.isFloating = entry.value(QStringLiteral("is_floating")).toBool();
         context.isUrgent = entry.value(QStringLiteral("is_urgent")).toBool();
-        context.monitorProfile = profileForWorkspace(config, entry.value(QStringLiteral("workspace_id")), workspaces, outputs);
+        context.output = outputOfWorkspaceId(entry.value(QStringLiteral("workspace_id")), workspaces);
+        context.monitorProfile = profileForOutput(config, context.output, outputs);
         if (Layout::ruleApplies(rule, context, false)) {
             matching.append(entry);
         }

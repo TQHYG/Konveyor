@@ -58,11 +58,13 @@ PlasmoidItem {
     readonly property bool wanUp: network.wan_up === true
     readonly property int onlineCount: leases.filter(lease => lease.connected === true).length
 
-    readonly property string routerState: paused ? "paused" : !online ? "offline" : !wanUp && ready ? "wandown" : "ok"
+    readonly property bool collectorStale: routerData.stale
+    readonly property string routerState: collectorStale ? "stale" : paused ? "paused" : !online ? "offline" : !wanUp && ready ? "wandown" : "ok"
     readonly property color stateColor: routerState === "ok" ? Kirigami.Theme.positiveTextColor
                                       : routerState === "wandown" || routerState === "paused" ? Kirigami.Theme.neutralTextColor
                                       : Kirigami.Theme.negativeTextColor
-    readonly property string stateText: routerState === "paused" ? i18n("Monitoring paused")
+    readonly property string stateText: routerState === "stale" ? i18n("Collector stopped")
+                                      : routerState === "paused" ? i18n("Monitoring paused")
                                       : routerState === "offline" ? i18n("Router not connected")
                                       : routerState === "wandown" ? i18n("Internet is down") : i18n("Online")
 
@@ -180,6 +182,9 @@ PlasmoidItem {
             disconnectSource(source)
         }
     }
+    function shq(text) {
+        return "'" + String(text).replace(/'/g, "'\\''") + "'"
+    }
     function ctlRun(args) {
         ctlRunner.connectSource(ctl + " " + args)
     }
@@ -296,67 +301,17 @@ PlasmoidItem {
         function onSortByChanged() { root.syncClients() }
     }
 
-    readonly property var lastResult: {
-        const text = Plasmoid.configuration.lastResult
-        if (!text) return null
-        try { return JSON.parse(text) } catch (error) { return null }
+    SpeedTest {
+        id: speedTest
+        router: routerData
+        onFailed: message => root.flashMessage(message, true)
     }
-    readonly property var speedHistory: {
-        try { return JSON.parse(Plasmoid.configuration.speedHistory || "[]") } catch (error) { return [] }
-    }
-    property bool testing: false
-    property var live: null
-    P5Support.DataSource {
-        id: speedRunner
-        engine: "executable"
-        onNewData: function(source, data) {
-            const text = (data.stdout || "").trim()
-            if (text) {
-                try {
-                    const result = JSON.parse(text)
-                    Plasmoid.configuration.lastResult = text
-                    if (result.ok !== false) {
-                        if (result.down_mbps) Plasmoid.configuration.peakDown = result.down_mbps
-                        if (result.up_mbps) Plasmoid.configuration.peakUp = result.up_mbps
-                        const next = [result].concat(root.speedHistory).slice(0, 20)
-                        Plasmoid.configuration.speedHistory = JSON.stringify(next)
-                    } else {
-                        root.flashMessage(result.error || i18n("Speed test failed"), true)
-                    }
-                } catch (error) {
-                    root.flashMessage(i18n("Speed test failed"), true)
-                }
-            }
-            root.testing = false
-            root.live = null
-            disconnectSource(source)
-        }
-    }
-    FileWatcher {
-        path: root.testing && routerData.cachePath ? routerData.cachePath.replace(/data\.json$/, "speedtest_live.json") : ""
-        onChanged: {
-            const xhr = new XMLHttpRequest()
-            xhr.open("GET", "file://" + path)
-            xhr.onreadystatechange = function() {
-                if (xhr.readyState !== XMLHttpRequest.DONE || !xhr.responseText || !root.testing)
-                    return
-                try { root.live = JSON.parse(xhr.responseText) } catch (error) {}
-            }
-            xhr.send()
-        }
-    }
-    function runSpeedTest() {
-        if (testing)
-            return
-        live = null
-        testing = true
-        speedRunner.connectSource("$HOME/.local/bin/routermon-speedtest")
-    }
-    function deleteSpeedResult(index) {
-        const next = speedHistory.slice()
-        next.splice(index, 1)
-        Plasmoid.configuration.speedHistory = JSON.stringify(next)
-    }
+    readonly property alias lastResult: speedTest.lastResult
+    readonly property alias speedHistory: speedTest.speedHistory
+    readonly property alias testing: speedTest.testing
+    readonly property alias live: speedTest.live
+    function runSpeedTest() { speedTest.run() }
+    function deleteSpeedResult(index) { speedTest.deleteResult(index) }
     function ago(ts) {
         if (!ts) return ""
         const seconds = Math.max(0, Date.now() / 1000 - ts)
@@ -379,6 +334,8 @@ PlasmoidItem {
     toolTipMainText: info.model ? i18n("%1 · %2", info.model, network.wan_ip || i18n("no WAN")) : i18n("Router")
     property bool tooltipWanted: false
     function tooltipText() {
+        if (routerState === "stale")
+            return stateText
         if (localFallback)
             return i18n("Router not connected · showing this computer's network I/O and ping")
         if (routerState === "paused" || routerState === "offline")

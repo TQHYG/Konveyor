@@ -296,6 +296,26 @@ private Q_SLOTS:
         VERIFY_INVARIANTS(fixture);
     }
 
+    void dialogThatGetsItsParentLateIsNotLeftBehindIt()
+    {
+        Fixture fixture;
+        fixture.add(QStringLiteral("main"));
+        Layout::WindowProperties parentProperties = makeWindow(QStringLiteral("parent"), QStringLiteral("parent"), QSizeF(400, 300));
+        parentProperties.isDialog = true;
+        const auto parent = fixture.addWith(parentProperties);
+        Layout::WindowProperties childProperties = makeWindow(QStringLiteral("child"), QStringLiteral("child"), QSizeF(200, 100));
+        childProperties.isDialog = true;
+        const auto child = fixture.addWith(childProperties);
+        fixture.engine().activateWindow(parent);
+        fixture.settle();
+        QVERIFY(fixture.state(child).stackingIndex < fixture.state(parent).stackingIndex);
+        childProperties.parent = parent;
+        fixture.engine().updateWindowProperties(child, childProperties);
+        fixture.settle();
+        QVERIFY(fixture.state(child).stackingIndex > fixture.state(parent).stackingIndex);
+        VERIFY_INVARIANTS(fixture);
+    }
+
     void setWindowWidthOnFloatingWindow()
     {
         Fixture fixture;
@@ -320,22 +340,6 @@ private Q_SLOTS:
         VERIFY_INVARIANTS(fixture);
     }
 
-    void defaultFloatingPositionRule()
-    {
-        Config::Config config = instantConfig();
-        Config::WindowRule rule;
-        Config::Match match;
-        match.appId = QRegularExpression(QStringLiteral("^corner$"));
-        rule.matches.append(match);
-        rule.openFloating = true;
-        rule.defaultFloatingPosition = Config::FloatingPosition {10, 20, Config::FloatingRelativeTo::TopLeft};
-        config.windowRules.append(rule);
-        Fixture fixture(config);
-        const auto id = fixture.add(QStringLiteral("corner"), QSizeF(300, 200));
-        QCOMPARE(fixture.frame(id).topLeft(), QPointF(10, 20));
-        VERIFY_INVARIANTS(fixture);
-    }
-
     void floatingWindowsKeepPositionAcrossTilingRoundTrip()
     {
         Fixture fixture;
@@ -345,6 +349,21 @@ private Q_SLOTS:
         fixture.perform(QStringLiteral("toggle-window-floating"));
         fixture.perform(QStringLiteral("toggle-window-floating"));
         QCOMPARE(fixture.frame(id).topLeft(), QPointF(300, 400));
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void tinyFloatingWindowStaysAtTheStartOfAnAreaNarrowerThanIt()
+    {
+        Config::Config config = instantConfig();
+        Config::WindowRule rule = ruleFor(QStringLiteral("tiny"));
+        rule.openFloating = true;
+        config.windowRules.append(rule);
+        Fixture fixture(config);
+        fixture.addOutput(withPanels(makeOutput(QStringLiteral("DP-1"), QRectF(0, 0, 1920, 1080)), QMarginsF(956, 536, 956, 536)));
+        const auto id = fixture.add(QStringLiteral("tiny"), QSizeF(10, 10));
+        QCOMPARE(fixture.frame(id), QRectF(956, 536, 10, 10));
+        moveFloating(fixture, QStringLiteral("+50"), QStringLiteral("-50"));
+        QCOMPARE(fixture.frame(id).topLeft(), QPointF(956, 536));
         VERIFY_INVARIANTS(fixture);
     }
 };

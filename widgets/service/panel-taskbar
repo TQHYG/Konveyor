@@ -1,0 +1,240 @@
+#!/usr/bin/env python3
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+
+from appletsrc import (ADDED, APPLET, MARK, ORDER, applets_on, drop_from_order, is_inside, next_applet_id, panel_applets, panel_ids, read_groups, reorder,
+                       set_value, value, write_groups)
+
+TASKBAR = "org.devl0rd.taskbar"
+LAUNCHER = "org.devl0rd.portal.launcher"
+TASK_MANAGERS = ("org.kde.plasma.icontasks", "org.kde.plasma.taskmanager")
+PINS = "launchers"
+ORDER_BEFORE = "konveyorOriginalOrder"
+ORDER_AFTER = "konveyorInstalledOrder"
+SETTINGS = "[Configuration][General]"
+USAGE = "usage: panel-taskbar install <appletsrc> | uninstall <appletsrc> [<taskbarrc>] | settings <appletsrc> <taskbarrc>\n"
+
+
+def panel_of(header):
+    return APPLET.match(header).group(1)
+
+
+def chosen_panel(groups, applets):
+    for plugins in ((LAUNCHER,), TASK_MANAGERS):
+        found = [panel_of(header) for _, header, lines in applets if value(lines, "plugin") in plugins]
+        if found:
+            return found[0]
+    return min(panel_ids(groups), key=int)
+
+
+def pins_of(groups, headers):
+    settings = {header: lines for header, lines in groups if header}
+    pins = []
+    for header in headers:
+        for pin in (value(settings.get(header + "[Configuration][General]", []), PINS) or "").split(","):
+            if pin and pin not in pins:
+                pins.append(pin)
+    return pins
+
+
+def after_launcher(groups, panel, applet):
+    launchers = {APPLET.match(header).group(2) for _, header, lines in panel_applets(groups)
+                 if panel_of(header) == panel and value(lines, "plugin") == LAUNCHER}
+
+    def change(order):
+        order = [i for i in order if i != applet]
+        at = next((index + 1 for index, i in enumerate(order) if i in launchers), 0)
+        return order[:at] + [applet] + order[at:]
+
+    return reorder(groups, panel, change)
+
+
+def order_of(groups, panel):
+    general = f"[Containments][{panel}][General]"
+    lines = next((lines for header, lines in groups if header == general), [])
+    return value(lines, ORDER)
+
+
+def remember_order(groups, result, panel, kept):
+    before = order_of(groups, panel)
+    if before is None:
+        before = ";".join(sorted(applets_on(groups, panel), key=int))
+    after = order_of(result, panel)
+    if before == after:
+        return result
+    return [(header, set_value(set_value(lines, ORDER_BEFORE, before), ORDER_AFTER, after) if header == kept else lines)
+            for header, lines in result]
+
+
+def restore_order(groups, header, lines):
+    before = value(lines, ORDER_BEFORE)
+    installed = value(lines, ORDER_AFTER)
+    current = order_of(groups, panel_of(header))
+    if before is None or installed is None or current is None:
+        return groups
+    applet = APPLET.match(header).group(2)
+    order = [entry for entry in current.split(";") if entry]
+    previous = [entry for entry in before.split(";") if entry]
+    installed = [entry for entry in installed.split(";") if entry]
+    if applet not in order or applet not in installed:
+        return groups
+    known = set(installed) & set(order)
+    current_before = set(order[:order.index(applet)]) & known
+    installed_before = set(installed[:installed.index(applet)]) & known
+    if current_before != installed_before:
+        return groups
+    kept = [entry for entry in order if entry != applet]
+    if applet in previous:
+        index = previous.index(applet)
+        predecessor = next((entry for entry in reversed(previous[:index]) if entry in kept), None)
+        successor = next((entry for entry in previous[index + 1:] if entry in kept), None)
+        if predecessor:
+            at = kept.index(predecessor) + 1
+        elif successor:
+            at = kept.index(successor)
+        else:
+            return groups
+        kept.insert(at, applet)
+    return reorder(groups, panel_of(header), lambda _: kept)
+
+
+def install(groups):
+    applets = list(panel_applets(groups))
+    if any(value(lines, "plugin") == TASKBAR for _, _, lines in applets):
+        return groups, False
+    panel = chosen_panel(groups, applets)
+    managers = [header for _, header, lines in applets if panel_of(header) == panel and value(lines, "plugin") in TASK_MANAGERS]
+    pins = pins_of(groups, managers)
+    kept = managers[0] if managers else f"[Containments][{panel}][Applets][{next_applet_id(groups)}]"
+    removed = managers[1:]
+    settings = kept + "[Configuration][General]"
+    result = []
+    for header, lines in groups:
+        if header == kept:
+            lines = set_value(set_value(lines, "plugin", TASKBAR), MARK, value(lines, "plugin"))
+        elif header == settings and value(lines, PINS) != (",".join(pins) or None):
+            lines = set_value(lines, PINS, ",".join(pins) or None)
+        elif header in removed or is_inside(header, removed):
+            continue
+        result.append((header, lines))
+    if not managers:
+        result.append((kept, ["immutability=1", f"plugin={TASKBAR}", f"{ADDED}=true", ""]))
+    if pins and not any(header == settings for header, _ in result):
+        result.append((settings, [f"{PINS}=" + ",".join(pins), ""]))
+    result = after_launcher(drop_from_order(result, removed), panel, APPLET.match(kept).group(2))
+    if managers:
+        result = remember_order(groups, result, panel, kept)
+    return result, True
+
+
+def uninstall(groups, pins=None):
+    for _, header, lines in list(panel_applets(groups)):
+        if value(lines, "plugin") == TASKBAR and value(lines, MARK):
+            groups = restore_order(groups, header, lines)
+    changed = False
+    removed = []
+    restored = []
+    result = []
+    for header, lines in groups:
+        taskbar = APPLET.match(header or "") and value(lines, "plugin") == TASKBAR
+        if taskbar and value(lines, MARK):
+            lines = set_value(set_value(lines, "plugin", value(lines, MARK)), MARK, None)
+            lines = set_value(set_value(lines, ORDER_BEFORE, None), ORDER_AFTER, None)
+            restored.append(header)
+            changed = True
+        elif taskbar and value(lines, ADDED):
+            removed.append(header)
+            changed = True
+            continue
+        elif is_inside(header, removed):
+            continue
+        result.append((header, lines))
+    if pins:
+        result = with_pins(result, restored, pins)
+    return drop_from_order(result, removed), changed
+
+
+def with_pins(groups, applets, pins):
+    wanted = {applet + SETTINGS for applet in applets}
+    result = [(header, set_value(lines, PINS, pins) if header in wanted and value(lines, PINS) is None else lines) for header, lines in groups]
+    present = {header for header, _ in result}
+    return result + [(header, [f"{PINS}={pins}", ""]) for header in sorted(wanted - present)]
+
+
+def settings(groups, stored):
+    taskbars = {header for _, header, lines in panel_applets(groups) if value(lines, "plugin") == TASKBAR}
+    moved = {}
+    result = []
+    for header, lines in groups:
+        if header and header[:-len(SETTINGS)] in taskbars and header.endswith(SETTINGS):
+            for line in lines:
+                key, sep, entry = line.partition("=")
+                if sep and key not in moved:
+                    moved[key] = entry
+            continue
+        result.append((header, lines))
+    if not moved:
+        return groups, stored, False
+    general = next((lines for header, lines in stored if header == "[General]"), None)
+    if general is None:
+        general = [""]
+        stored = stored + [("[General]", general)]
+    merged = general
+    for key, entry in moved.items():
+        if value(merged, key) is None:
+            merged = set_value(merged, key, entry)
+    stored = [(header, merged if header == "[General]" else lines) for header, lines in stored]
+    return result, stored, True
+
+
+def read_or_empty(path):
+    try:
+        return read_groups(path)
+    except FileNotFoundError:
+        return [(None, [])]
+
+
+def move_settings(path, target):
+    groups, stored, changed = settings(read_groups(path), read_or_empty(target))
+    if changed:
+        Path(target).parent.mkdir(parents=True, exist_ok=True)
+        write_groups(target, stored)
+        write_groups(path, groups)
+        print("Konveyor Taskbar settings moved to Konveyor Settings")
+    return 0
+
+
+def main():
+    arguments = sys.argv[1:]
+    command = arguments[:1]
+    allowed = {"install": (2,), "uninstall": (2, 3), "settings": (3,)}
+    if not command or command[0] not in allowed or len(arguments) not in allowed[command[0]]:
+        sys.stderr.write(USAGE)
+        return 2
+    path = arguments[1]
+    try:
+        groups = read_groups(path)
+    except FileNotFoundError:
+        return 0
+    if command[0] == "settings":
+        return move_settings(path, arguments[2])
+    if command[0] == "install" and not panel_ids(groups):
+        sys.stderr.write("panel-taskbar: no Plasma panel was found\n")
+        return 1
+    if command[0] == "install":
+        groups, changed = install(groups)
+    else:
+        stored = read_or_empty(arguments[2]) if len(arguments) == 3 else [(None, [])]
+        general = next((lines for header, lines in stored if header == "[General]"), [])
+        groups, changed = uninstall(groups, value(general, PINS))
+    if changed:
+        write_groups(path, groups)
+        print("Konveyor Taskbar set up next to the Kontrol Panel" if command[0] == "install" else "Restored Plasma's task manager")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

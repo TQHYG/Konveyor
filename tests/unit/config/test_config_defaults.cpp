@@ -15,6 +15,9 @@ private Q_SLOTS:
     void defaultAppearanceValues();
     void defaultAnimationValues();
     void defaultGestureAndInputValues();
+    void defaultDecorationDetails();
+    void defaultTouchValues();
+    void defaultTopLevelValues();
     void mergedLayoutAppliesPart();
     void mergedLayoutUnsetsWithFalseFlag();
     void mergedLayoutRestoresEmptyPresets();
@@ -36,6 +39,8 @@ void TestConfigDefaults::defaultLayoutValues()
     QCOMPARE(layout.alwaysCenterSingleColumn, false);
     QCOMPARE(layout.alwaysExpandSingleColumn, true);
     QCOMPARE(layout.emptyWorkspaceAboveFirst, false);
+    QCOMPARE(layout.fixedWorkspaceCount, 0);
+    QCOMPARE(layout.horizontalDesktops, false);
     QCOMPARE(layout.defaultColumnDisplay, ColumnDisplay::Normal);
     QCOMPARE(layout.presetColumnWidths.size(), 4);
     QCOMPARE(proportionOf(layout.presetColumnWidths.at(0)), 0.25);
@@ -101,13 +106,75 @@ void TestConfigDefaults::defaultGestureAndInputValues()
     QCOMPARE(config.gestures.hotCorners.enabled, true);
     QCOMPARE(config.gestures.hotCorners.topLeft, true);
     QCOMPARE(config.gestures.hotCorners.topRight, false);
-    QCOMPARE(config.gestures.titlebarDrag, TitlebarDrag::ScrollView);
-    QCOMPARE(config.gestures.resizeTiledWindows, false);
+    QCOMPARE(config.gestures.titlebarDrag, TitlebarDrag::MoveWindow);
+    QCOMPARE(config.gestures.resizeTiledWindows, true);
     QCOMPARE(config.input.focusFollowsMouse, false);
     QCOMPARE(config.input.warpMouseToFocus, false);
     QCOMPARE(config.input.workspaceAutoBackAndForth, false);
     QCOMPARE(config.input.modKey, QStringLiteral("Super"));
     QCOMPARE(config.configNotificationDisableFailed, false);
+}
+
+void TestConfigDefaults::defaultDecorationDetails()
+{
+    const Layout layout = defaultConfig().layout;
+    QCOMPARE(layout.border.inactive.color, QColor(80, 80, 80));
+    QCOMPARE(layout.border.urgent.color, QColor(155, 0, 0));
+    QCOMPARE(layout.focusRing.active.source, ColorSource::Explicit);
+    QCOMPARE(layout.focusRing.active.gradient, std::nullopt);
+    QCOMPARE(layout.tabIndicator.hideWhenSingleTab, false);
+    QCOMPARE(layout.tabIndicator.placeWithinColumn, false);
+    QCOMPARE(layout.tabIndicator.gapsBetweenTabs, 0.0);
+    QCOMPARE(layout.tabIndicator.cornerRadius, 0.0);
+    QCOMPARE(layout.tabIndicator.active, std::nullopt);
+    QCOMPARE(layout.tabIndicator.inactive, std::nullopt);
+    QCOMPARE(layout.tabIndicator.urgent, std::nullopt);
+    QCOMPARE(layout.insertHint.paint.gradient, std::nullopt);
+}
+
+void TestConfigDefaults::defaultTouchValues()
+{
+    const Gestures gestures = defaultConfig().gestures;
+    for (const MultiTouch &touch : {gestures.touchpad, gestures.touchscreen}) {
+        QCOMPARE(touch.enabled, true);
+        QCOMPARE(touch.swipeFingers, 3);
+        QCOMPARE(touch.pinchFingers, 4);
+        QCOMPARE(touch.windowSwipeFingers, 4);
+        QCOMPARE(touch.naturalSwipe, true);
+        QCOMPARE(touch.horizontalSwipe, HorizontalSwipe::ScrollView);
+        QCOMPARE(touch.verticalSwipe, VerticalSwipe::SwitchWorkspace);
+        QCOMPARE(touch.pinch, PinchAction::ToggleOverview);
+        QCOMPARE(touch.windowHorizontalSwipe, WindowHorizontalSwipe::ConsumeOrExpel);
+        QCOMPARE(touch.windowVerticalSwipe, WindowVerticalSwipe::MoveWindow);
+        QCOMPARE(touch.threeFingerTap, TapAction::CycleWidth);
+        QCOMPARE(touch.fourFingerTap, TapAction::KontrolPanel);
+        QCOMPARE(touch.fiveFingerTap, TapAction::Off);
+    }
+    QCOMPARE(gestures.touchscreen.longPressToMove, true);
+    QCOMPARE(gestures.touchscreen.longPressMs, 500);
+    QCOMPARE(gestures.dndEdgeWorkspaceSwitch.delayMs, 100.0);
+    QCOMPARE(gestures.dndEdgeWorkspaceSwitch.maxSpeed, 1500.0);
+    QCOMPARE(gestures.hotCorners.bottomLeft, false);
+    QCOMPARE(gestures.hotCorners.bottomRight, false);
+}
+
+void TestConfigDefaults::defaultTopLevelValues()
+{
+    const Config config = defaultConfig();
+    QCOMPARE(config.hideDesktopWidgets, false);
+    QCOMPARE(config.fillPanelsOnMaximize, false);
+    QCOMPARE(config.disableMinimize, false);
+    QCOMPARE(config.experiments, Experiments {});
+    QCOMPARE(config.input.warpMouseMode, WarpMouseMode::Separate);
+    QVERIFY(config.outputs.isEmpty());
+    QVERIFY(config.monitorProfiles.isEmpty());
+    QVERIFY(config.workspaces.isEmpty());
+    QVERIFY(config.windowRules.isEmpty());
+    QVERIFY(config.binds.isEmpty());
+    for (const AnimationParams &slot : {config.animations.workspaceSwitch, config.animations.windowOpen,
+             config.animations.horizontalViewMovement, config.animations.windowMovement, config.animations.windowResize}) {
+        QCOMPARE(slot.enabled, true);
+    }
 }
 
 void TestConfigDefaults::mergedLayoutAppliesPart()

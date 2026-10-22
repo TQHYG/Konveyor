@@ -19,7 +19,7 @@ Modes:
   portal-friends --serve      resident: refresh the snapshot every interval
   portal-friends --set-key K  write the Steam Web API key into the config
 """
-import os, re, sys, json, time, urllib.parse, urllib.request, urllib.error
+import math, os, re, sys, json, time, urllib.parse, urllib.request, urllib.error
 
 HOME = os.path.expanduser("~")
 APP = "Plasma-App-Portal"
@@ -28,7 +28,8 @@ CONFIG = os.path.join(CONFIG_HOME, APP, "config.json")
 RUNDIR = os.path.join(os.environ.get("XDG_RUNTIME_DIR", "/tmp"), APP)
 SNAP = os.path.join(RUNDIR, "friends.json")
 STEAM_ROOTS = [os.path.join(HOME, ".local/share/Steam"),
-               os.path.join(HOME, ".steam/steam")]
+               os.path.join(HOME, ".steam/steam"),
+               os.path.join(HOME, ".var/app/com.valvesoftware.Steam/data/Steam")]
 API = "https://api.steampowered.com"
 HEADER_CACHE = os.path.join(os.environ.get("XDG_CACHE_HOME", os.path.join(HOME, ".cache")), APP, "headers.json")
 
@@ -66,9 +67,10 @@ def resolve_headers(appids):
 def load_config():
     try:
         with open(CONFIG) as f:
-            return json.load(f)
+            config = json.load(f)
     except Exception:
         return {}
+    return config if isinstance(config, dict) else {}
 
 
 def detect_steamid():
@@ -82,7 +84,7 @@ def detect_steamid():
         for m in re.finditer(r'"(7656\d{13})"\s*\{(.*?)\}', txt, re.S):
             sid, body = m.group(1), m.group(2)
             best = best or sid
-            if '"MostRecent"' in body and '"1"' in body:
+            if re.search(r'"MostRecent"\s*"1"', body, re.I):
                 return sid
         if best:
             return best
@@ -162,7 +164,7 @@ def build_snapshot(cfg):
     if not key or "PASTE" in key:
         return {"ts": time.time(), "ok": False, "by_appid": {},
                 "needs_api_key": True, "error": "no steam_api_key in config"}
-    sid = (cfg.get("steamid") or "").strip() or detect_steamid()
+    sid = str(cfg.get("steamid") or "").strip() or detect_steamid()
     if not sid:
         return {"ts": time.time(), "ok": False, "by_appid": {},
                 "error": "could not determine SteamID"}
@@ -196,7 +198,10 @@ def write_snapshot(snap):
 
 def cmd_check():
     cfg = load_config()
-    snap = build_snapshot(cfg)
+    try:
+        snap = build_snapshot(cfg)
+    except Exception as error:
+        snap = {"ok": False, "error": str(error)}
     if not snap["ok"]:
         print("NOT OK:", snap["error"])
         print(f"  config:  {CONFIG} (exists: {os.path.exists(CONFIG)})")
@@ -211,11 +216,31 @@ def cmd_check():
     return 0
 
 
+MIN_POLL_INTERVAL = 5
+
+
+def poll_interval(cfg):
+    value = cfg.get("poll_interval", 60)
+    try:
+        interval = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"poll_interval must be a number of seconds, not {value!r}") from None
+    if not math.isfinite(interval) or interval < MIN_POLL_INTERVAL:
+        raise ValueError(f"poll_interval must be at least {MIN_POLL_INTERVAL} seconds, not {value!r}")
+    return interval
+
+
 def cmd_serve():
-    interval = float(load_config().get("poll_interval", 60))
     while True:
+        cfg = load_config()
         try:
-            write_snapshot(build_snapshot(load_config()))
+            interval = poll_interval(cfg)
+        except ValueError as error:
+            write_snapshot({"ts": time.time(), "ok": False, "by_appid": {}, "error": str(error)})
+            sys.stderr.write(f"portal-friends: {error} in {CONFIG}\n")
+            return 1
+        try:
+            write_snapshot(build_snapshot(cfg))
         except Exception as e:
             try:
                 write_snapshot({"ts": time.time(), "ok": False, "by_appid": {},
@@ -259,10 +284,15 @@ def cmd_set_key():
     return 0
 
 
+MODES = {"--check": cmd_check, "--serve": cmd_serve, "--snapshot": cmd_snapshot, "--set-key": cmd_set_key}
+
+
 def main():
     arg = sys.argv[1] if len(sys.argv) > 1 else "--check"
-    return {"--check": cmd_check, "--serve": cmd_serve,
-            "--snapshot": cmd_snapshot, "--set-key": cmd_set_key}.get(arg, cmd_check)()
+    if arg not in MODES:
+        sys.stderr.write(f"portal-friends: unknown mode {arg!r}\n{__doc__.split('Modes:', 1)[1]}")
+        return 2
+    return MODES[arg]()
 
 
 if __name__ == "__main__":

@@ -98,6 +98,14 @@ Workspace *Engine::Private::workspaceOf(WindowId id)
     return nullptr;
 }
 
+Tile *Engine::Private::tileOf(WindowId id)
+{
+    if (Workspace *workspace = workspaceOf(id)) {
+        return workspace->tileFor(id);
+    }
+    return windowDrag && windowDrag->window == id && windowDrag->tile ? &*windowDrag->tile : nullptr;
+}
+
 Workspace *Engine::Private::workspaceById(WorkspaceId id)
 {
     for (Workspace *workspace : allWorkspaces()) {
@@ -110,7 +118,10 @@ Workspace *Engine::Private::workspaceById(WorkspaceId id)
 
 std::optional<WindowId> Engine::Private::target(std::optional<WindowId> requested) const
 {
-    return requested ? requested : focused;
+    if (requested) {
+        return requested;
+    }
+    return windowDrag && windowDrag->moving ? std::optional(windowDrag->window) : focused;
 }
 
 Workspace *Engine::Private::workspaceForTarget(std::optional<WindowId> requested)
@@ -119,6 +130,36 @@ Workspace *Engine::Private::workspaceForTarget(std::optional<WindowId> requested
         return workspaceOf(*requested);
     }
     return activeWorkspace();
+}
+
+std::optional<WindowId> Engine::windowAt(const QPointF &globalPos) const
+{
+    const std::optional<WindowHit> hit = hitAt(globalPos);
+    return hit ? std::optional(hit->id) : std::nullopt;
+}
+
+std::optional<WindowHit> Engine::hitAt(const QPointF &globalPos) const
+{
+    for (const Monitor &monitor : d->monitors) {
+        const QPointF origin = d->originOf(monitor.outputName());
+        const QRectF geometry(origin, monitor.area().viewSize);
+        if (!geometry.contains(globalPos)) {
+            continue;
+        }
+        const QPointF local = globalPos - origin;
+        const std::vector<double> offsets = d->workspaceRenderOffsets(monitor);
+        const bool workspaceMotion = d->usesWorkspaceMotion(monitor);
+        for (std::size_t idx = 0; idx < monitor.workspaces().size(); ++idx) {
+            if (!workspaceMotion && idx != monitor.activeWorkspaceIndex()) {
+                continue;
+            }
+            const auto hit = monitor.workspaces()[idx].windowUnder(local - QPointF(0.0, offsets[idx]));
+            if (hit) {
+                return hit;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 }

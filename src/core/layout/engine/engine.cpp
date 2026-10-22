@@ -1,5 +1,7 @@
 #include "layout/engine/engineprivate.h"
 
+#include "config/loader.h"
+#include "config/log.h"
 #include "layout/common/geometry.h"
 #include "layout/monitor/monitorprofiles.h"
 
@@ -17,13 +19,22 @@ constexpr auto StartupWindow = std::chrono::seconds(60);
 
 std::optional<Config::Layout> layoutForOutput(const Config::Config &config, const QString &name, QSizeF size)
 {
-    for (const Config::OutputConfig &output : config.outputs) {
-        if (output.name.compare(name, Qt::CaseInsensitive) == 0 && output.layout) {
-            return output.layout;
-        }
-    }
     const Config::MonitorProfile *profile = monitorProfileFor(config, name, size);
-    return profile ? profile->layout : std::nullopt;
+    const auto output = std::ranges::find_if(
+        config.outputs, [&name](const Config::OutputConfig &entry) { return entry.name.compare(name, Qt::CaseInsensitive) == 0; });
+    const bool fromProfile = profile && profile->layout;
+    const bool fromOutput = output != config.outputs.end() && output->layout;
+    if (!fromProfile && !fromOutput) {
+        return std::nullopt;
+    }
+    Config::Layout layout = config.layout;
+    if (fromProfile) {
+        layout = Config::mergedLayout(layout, *profile->layout);
+    }
+    if (fromOutput) {
+        layout = Config::mergedLayout(layout, *output->layout);
+    }
+    return layout;
 }
 
 }
@@ -34,14 +45,33 @@ Engine::Engine(Anim::Clock &clock, Hooks hooks)
 
 Engine::~Engine() = default;
 
+void Engine::setNativeDesktopPresentation(bool enabled)
+{
+    d->nativeDesktopPresentation = enabled;
+}
+
+bool Engine::Private::usesWorkspaceMotion(const Monitor &monitor) const
+{
+    return !nativeDesktopPresentation || monitor.isWorkspaceGesture();
+}
+
+std::vector<double> Engine::Private::workspaceRenderOffsets(const Monitor &monitor) const
+{
+    return usesWorkspaceMotion(monitor) ? monitor.workspaceRenderOffsets() : std::vector<double>(monitor.workspaces().size() + 1, 0.0);
+}
+
 void Engine::setConfig(const Config::Config &config)
 {
     std::vector<Config::Layout> previous;
     for (const Monitor &monitor : d->monitors) {
         previous.push_back(monitor.layoutOverride() ? *monitor.layoutOverride() : d->config.layout);
     }
+    const QList<Config::NamedWorkspace> previousNamed = d->config.workspaces;
     d->config = config;
+    d->forgetRemovedWorkspaceNames(previousNamed);
     d->applyOptions();
+    d->applyNamedWorkspaceLayouts();
+    d->applyNamedWorkspaceHomes(previousNamed);
     for (std::size_t idx = 0; idx < previous.size(); ++idx) {
         d->reflowMonitorLayout(d->monitors[idx], previous[idx]);
     }
@@ -66,8 +96,27 @@ bool Engine::Private::atStartup() const
     return Anim::saturatingSub(clock.rawNow(), startupTime) < Anim::Duration(StartupWindow);
 }
 
+Anim::Duration Engine::timeUntilStartupEnds() const
+{
+    return Anim::saturatingSub(Anim::saturatingAdd(d->startupTime, Anim::Duration(StartupWindow)), d->clock.rawNow());
+}
+
+void Engine::runWidgetTool(const QString &name, const QStringList &arguments) const
+{
+    if (d->hooks.runWidgetTool) {
+        d->hooks.runWidgetTool(name, arguments);
+    }
+}
+
+void Engine::refreshRules()
+{
+    d->refresh();
+}
+
 void Engine::addOutput(const OutputInfo &output)
 {
+    qCInfo(lcKonveyor) << "konveyor: output added" << output.name << output.geometry << "work area" << output.workArea << "scale"
+                       << output.scale;
     if (d->monitorIndexByName(output.name)) {
         updateOutput(output);
         return;
@@ -80,7 +129,9 @@ void Engine::addOutput(const OutputInfo &output)
         taken = std::move(d->orphanWorkspaces);
         d->orphanWorkspaces.clear();
     } else {
-        taken = d->monitors[0].takeWorkspacesForOutput(area);
+        for (Monitor &monitor : d->monitors) {
+            std::ranges::move(monitor.takeWorkspacesForOutput(area), std::back_inserter(taken));
+        }
     }
 
     std::optional<WorkspaceId> toActivate;
@@ -97,12 +148,19 @@ void Engine::addOutput(const OutputInfo &output)
 
 void Engine::updateOutput(const OutputInfo &output)
 {
+    qCInfo(lcKonveyor) << "konveyor: output changed" << output.name << output.geometry << "work area" << output.workArea << "scale"
+                       << output.scale;
     if (!d->monitorIndexByName(output.name)) {
         addOutput(output);
         return;
     }
-    d->outputInfos.insert(output.name, output);
     Monitor *monitor = d->monitorByName(output.name);
+    if (d->outputInfos.value(output.name).geometry.topLeft() != output.geometry.topLeft()) {
+        for (Workspace &workspace : monitor->workspaces()) {
+            workspace.clearWindowedFullscreenFallbacks();
+        }
+    }
+    d->outputInfos.insert(output.name, output);
     monitor->setArea(d->areaFor(output));
     const Config::Layout previous = monitor->layoutOverride() ? *monitor->layoutOverride() : d->config.layout;
     monitor->setLayoutOverride(layoutForOutput(d->config, output.name, output.geometry.size()));
@@ -113,9 +171,14 @@ void Engine::updateOutput(const OutputInfo &output)
 
 void Engine::removeOutput(const QString &name)
 {
+    qCInfo(lcKonveyor) << "konveyor: output removed" << name;
     const auto idx = d->monitorIndexByName(name);
     if (!idx) {
         return;
+    }
+    const bool draggedHere = d->windowDrag && d->windowDrag->output.compare(name, Qt::CaseInsensitive) == 0;
+    if (draggedHere && d->monitors.size() == 1) {
+        d->interactiveMoveFinish();
     }
     d->lastActiveWorkspace.insert(name, d->monitors[*idx].activeWorkspace().id());
     std::vector<Workspace> workspaces = d->monitors[*idx].releaseWorkspaces();
@@ -125,13 +188,9 @@ void Engine::removeOutput(const QString &name)
         d->activeMonitorIndex -= 1;
     }
 
-    if (d->monitors.empty()) {
-        for (Workspace &workspace : workspaces) {
-            workspace.updateConfig(d->options);
-        }
-        d->orphanWorkspaces = std::move(workspaces);
-    } else {
-        d->monitors[0].appendWorkspaces(std::move(workspaces));
+    d->sendHome(std::move(workspaces));
+    if (draggedHere && d->windowDrag) {
+        d->moveDragToActiveOutput();
     }
     d->refresh();
 }
@@ -154,6 +213,7 @@ std::optional<QString> Engine::focusedOutput() const
 
 void Engine::focusWorkspace(const QString &output, int index)
 {
+    qCInfo(lcKonveyor) << "konveyor: focusing workspace" << index << "on" << output;
     Monitor *monitor = d->monitorByName(output);
     if (!monitor || index < 1) {
         return;
@@ -175,29 +235,39 @@ void Engine::setOverviewOpen(bool open)
     if (d->overviewOpen == open) {
         return;
     }
-    d->overviewOpen = open;
-    for (Monitor &monitor : d->monitors) {
-        monitor.overviewOpen = open;
-    }
+    d->setOverviewState(open);
     if (d->hooks.setOverviewOpen) {
         d->hooks.setOverviewOpen(open);
     }
 }
 
+void Engine::Private::setOverviewState(bool open)
+{
+    overviewOpen = open;
+    for (Monitor &monitor : monitors) {
+        monitor.overviewOpen = open;
+    }
+}
+
 void Engine::tickAnimations()
 {
+    d->continueEdgeScroll();
     for (Monitor &monitor : d->monitors) {
         monitor.tickAnimations();
     }
     for (Workspace &workspace : d->orphanWorkspaces) {
         workspace.tickAnimations();
     }
+    if (d->windowDrag && d->windowDrag->tile) {
+        d->windowDrag->tile->tickAnimations();
+    }
     d->refresh();
 }
 
 bool Engine::isAnimating() const
 {
-    return std::ranges::any_of(d->monitors, &Monitor::isAnimating);
+    const bool dragAnimating = d->windowDrag && d->windowDrag->tile && d->windowDrag->tile->isAnimating();
+    return d->edgeScrolling || dragAnimating || std::ranges::any_of(d->monitors, &Monitor::isAnimating);
 }
 
 QString monitorProfileName(const Config::Config &config, const OutputArea &area)

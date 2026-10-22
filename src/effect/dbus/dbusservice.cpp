@@ -4,6 +4,7 @@
 
 #include <QDBusConnection>
 #include <QDBusError>
+#include <QDBusServiceWatcher>
 #include <QJsonObject>
 
 namespace Konveyor
@@ -26,18 +27,38 @@ DBusService::~DBusService()
 
 bool DBusService::registerService()
 {
-    QDBusConnection bus = QDBusConnection::sessionBus();
-    const bool objectRegistered = bus.registerObject(Ipc::dbusPath, this, QDBusConnection::ExportScriptableContents);
-    m_registered = objectRegistered && bus.registerService(Ipc::dbusService);
-    if (!m_registered) {
-        qWarning() << "konveyor: failed to register D-Bus service" << Ipc::dbusService << bus.lastError().message();
+    if (tryRegister()) {
+        return true;
     }
-    return m_registered;
+    qWarning() << "konveyor: could not register" << Ipc::dbusService
+               << "yet, waiting for its current owner to let go:" << QDBusConnection::sessionBus().lastError().message();
+    m_waitForName = std::make_unique<QDBusServiceWatcher>(
+        Ipc::dbusService, QDBusConnection::sessionBus(), QDBusServiceWatcher::WatchForUnregistration);
+    connect(m_waitForName.get(), &QDBusServiceWatcher::serviceUnregistered, this, [this] {
+        if (tryRegister()) {
+            m_waitForName.release()->deleteLater();
+        }
+    });
+    return false;
+}
+
+bool DBusService::tryRegister()
+{
+    QDBusConnection bus = QDBusConnection::sessionBus();
+    if (!bus.registerObject(Ipc::dbusPath, this, QDBusConnection::ExportScriptableContents)) {
+        return false;
+    }
+    if (!bus.registerService(Ipc::dbusService)) {
+        bus.unregisterObject(Ipc::dbusPath);
+        return false;
+    }
+    m_registered = true;
+    return true;
 }
 
 QString DBusService::compact(const QJsonDocument &document)
 {
-    return QString::fromUtf8(document.toJson(QJsonDocument::Compact));
+    return document.isNull() ? QStringLiteral("null") : QString::fromUtf8(document.toJson(QJsonDocument::Compact));
 }
 
 QString DBusService::Version() const
@@ -100,6 +121,16 @@ QString DBusService::Gestures() const
     return compact(m_handlers.gestures());
 }
 
+QString DBusService::AppRules(const QString &json) const
+{
+    return compact(m_handlers.appRules(json));
+}
+
+QString DBusService::SetAppRule(const QString &json)
+{
+    return m_handlers.setAppRule(json);
+}
+
 bool DBusService::MultiTouchActive() const
 {
     return m_multiTouchActive;
@@ -113,4 +144,30 @@ void DBusService::setMultiTouchActive(bool active)
     m_multiTouchActive = active;
     Q_EMIT MultiTouchChanged(active);
 }
+
+QString DBusService::ModifiersHeld() const
+{
+    return compact(QJsonDocument(QJsonObject {{QStringLiteral("super"), m_superHeld}, {QStringLiteral("alt"), m_altHeld}}));
+}
+
+void DBusService::setModifiersHeld(bool super, bool alt)
+{
+    if (super == m_superHeld && alt == m_altHeld) {
+        return;
+    }
+    m_superHeld = super;
+    m_altHeld = alt;
+    Q_EMIT ModifiersHeldChanged(super, alt);
+}
+
+void DBusService::announceLayoutChange()
+{
+    Q_EMIT LayoutChanged();
+}
+
+void DBusService::requestTaskbarItem(int number)
+{
+    Q_EMIT TaskbarItemRequested(number);
+}
+
 }

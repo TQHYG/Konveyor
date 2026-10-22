@@ -9,7 +9,7 @@ import ".."
 PopScroll {
     id: page
 
-    readonly property var sections: [pinned, folderGrid, recentApps, friendsPlaying, playing, recentFiles]
+    readonly property var sections: [pinned, folderGrid, recentApps, playing, friendsPlaying, recentFiles]
     readonly property int tileSize: launcherData.config.tileSize
     readonly property string greeting: {
         launcher.shown
@@ -38,7 +38,7 @@ PopScroll {
             Layout.fillWidth: true
         }
         PlasmaComponents.Label {
-            visible: !launcher.compact
+            visible: !launcher.compact && launcherData.config.showHomeDate
             text: page.today
             opacity: 0.6
         }
@@ -63,7 +63,8 @@ PopScroll {
         cellWidth: Math.round(page.tileSize + Kirigami.Units.gridUnit * 3.6)
         cellHeight: Math.round(page.tileSize + Kirigami.Units.gridUnit * 3.2)
         iconSize: page.tileSize
-        model: launcherData.pinnedEntries
+        entries: launcherData.pinnedEntries
+        keyOf: entry => entry.kind === "folder" ? "folder:" + entry.id : entry.favoriteId
         delegate: PinnedTile {}
     }
 
@@ -208,25 +209,6 @@ PopScroll {
     }
 
     SectionHeader {
-        visible: friendsPlaying.visible
-        title: i18n("Friends playing now")
-        trailing: i18np("%1 friend in game", "%1 friends in game", launcherData.friendsInGame)
-        actionText: i18n("All friends")
-        onActionClicked: launcher.goToPage("friends")
-    }
-    TileGrid {
-        id: friendsPlaying
-        visible: launcherData.config.showFriends && launcherData.playingNow.length > 0
-        Layout.fillWidth: true
-        Layout.preferredHeight: implicitHeight
-        cellWidth: Math.floor(width / Math.max(1, Math.floor(width / (Kirigami.Units.gridUnit * 15))))
-        cellHeight: Math.round(cellWidth * 0.4667)
-        limit: columns
-        model: launcherData.playingNow
-        delegate: PlayingNowCard {}
-    }
-
-    SectionHeader {
         visible: playing.visible
         title: i18n("Continue playing")
         actionText: i18n("All games")
@@ -242,8 +224,29 @@ PopScroll {
         wideCards: true
         showTitles: false
         limit: columns
-        model: launcherData.recentGames
+        entries: launcherData.recentGames
+        keyOf: game => game.id
         delegate: GameTile {}
+    }
+
+    SectionHeader {
+        visible: friendsPlaying.visible
+        title: i18n("Friends playing now")
+        trailing: i18np("%1 friend in game", "%1 friends in game", launcherData.friendsInGame)
+        actionText: i18n("All friends")
+        onActionClicked: launcher.goToPage("friends")
+    }
+    TileGrid {
+        id: friendsPlaying
+        visible: launcherData.config.showFriends && launcherData.playingNow.length > 0
+        Layout.fillWidth: true
+        Layout.preferredHeight: implicitHeight
+        cellWidth: Math.floor(width / Math.max(1, Math.floor(width / (Kirigami.Units.gridUnit * 15))))
+        cellHeight: Math.round(cellWidth * 0.4667)
+        limit: columns
+        entries: launcherData.playingNow
+        keyOf: entry => entry.key
+        delegate: PlayingNowCard {}
     }
 
     SectionHeader {

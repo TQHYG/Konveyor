@@ -11,15 +11,21 @@ LEGACY_NAMES=(linux-system-monitor linux-process-mon linux-router-monitor linux-
 LEGACY_SERVICES=(linux-system-monitor.service linux-process-mon.service linux-router-monitor.service linux-log-monitor.service portal-friends.service)
 GAMES_DESKTOP_ID="org.devl0rd.portal.launcher.games.desktop"
 LAUNCHER_SET_UP="${XDG_STATE_HOME:-$HOME/.local/state}/konveyor/launcher-set-up"
+TASKBAR_SET_UP="${XDG_STATE_HOME:-$HOME/.local/state}/konveyor/taskbar-set-up"
 KONTROL_PANEL_DIR="$WIDGETS_DIR/portals/kontrol-panel"
 KONTROL_PANEL_UNIT="konveyor-kontrol-panel.service"
 KONTROL_PANEL_BUS="org.devl0rd.KontrolPanel"
 KONTROL_PANEL_DBUS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/dbus-1/services"
 KONTROL_PANEL_CONFIG="$CONFIG_HOME/konveyor/kontrolpanelrc"
 KONTROL_PANEL_DESKTOP="${XDG_DATA_HOME:-$HOME/.local/share}/applications/$KONTROL_PANEL_BUS.desktop"
+KONTROL_PANEL_PROGRAM_DESKTOP="${XDG_DATA_HOME:-$HOME/.local/share}/applications/konveyor-kontrol-panel.desktop"
 PLASMA_LAUNCHER_ACTION=(plasmashell "activate application launcher" plasmashell "Activate Application Launcher")
 KONTROL_PANEL_KEYS=(16777250 150994992)
 LAUNCHER_KEYS_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/konveyor/launcher-keys"
+GAMES_ACTION=("$GAMES_DESKTOP_ID" _launch "Kontrol Panel: Games" "Kontrol Panel: Games")
+GRID_VIEW_ACTION=(kwin "Grid View" KWin "Toggle Grid View")
+GAMES_KEYS_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/konveyor/games-keys"
+META_G=268435527
 
 link_command() {
     chmod +x "$WIDGETS_DIR/$1"
@@ -39,14 +45,18 @@ read_router_config() {
         "$CONFIG_HOME/Linux-Router-Monitor/config.json" "$1" "${2:-}"
 }
 
+router_login() {
+    ROUTER_HOST=$(read_router_config host)
+    ROUTER_USER=$(read_router_config user)
+    ROUTER_KEY=$(read_router_config ssh_key)
+    ROUTER_KEY="${ROUTER_KEY/#\~/$HOME}"
+    ROUTER_SCRIPT=$(read_router_config remote_script /jffs/lrm-collect.sh)
+    [[ -n $ROUTER_HOST && -n $ROUTER_KEY ]]
+}
+
 push_router_collector() {
-    local host user key remote
-    host=$(read_router_config host)
-    user=$(read_router_config user)
-    key=$(read_router_config ssh_key)
-    remote=$(read_router_config remote_script /jffs/lrm-collect.sh)
-    key="${key/#\~/$HOME}"
-    [[ -n $host && -n $key ]] || return 0
+    router_login || return 0
+    local host=$ROUTER_HOST user=$ROUTER_USER key=$ROUTER_KEY remote=$ROUTER_SCRIPT
     say "Pushing the Router Monitor collector to $user@$host:$remote"
     if ! ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -i "$key" "$user@$host" \
         "cat > $remote && chmod +x $remote" <"$WIDGETS_DIR/router-monitor/router/collect.sh"; then
@@ -106,7 +116,7 @@ stage_lib_into() {
     rm -rf "${lib:?}"
     mkdir -p "$lib"
     cp "$SHARED_DIR/"*.qml "$SHARED_DIR/"*.js "$lib/"
-    cp "$WIDGETS_DIR/shared/MonitorOverlay.qml" "$lib/"
+    cp "$WIDGETS_DIR/shared/"*.qml "$lib/"
     local extra
     for extra in "$@"; do
         cp -r "$extra/." "$lib/"
@@ -165,6 +175,16 @@ Icon=start-here-kde-plasma-symbolic
 NoDisplay=true
 StartupNotify=false
 EOF
+    cat >"$KONTROL_PANEL_PROGRAM_DESKTOP" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Kontrol Panel service
+Comment=Lets the Kontrol Panel list open windows in its search
+Exec=$binary $KONTROL_PANEL_DIR
+Icon=start-here-kde-plasma-symbolic
+NoDisplay=true
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management
+EOF
     kbuildsycoca6 >/dev/null 2>&1 || true
     busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null
     systemctl --user daemon-reload
@@ -174,7 +194,8 @@ EOF
 
 remove_kontrol_panel_service() {
     systemctl --user disable --now "$KONTROL_PANEL_UNIT" >/dev/null 2>&1 || true
-    rm -f "${USER_UNITS:?}/${KONTROL_PANEL_UNIT:?}" "${KONTROL_PANEL_DBUS_DIR:?}/${KONTROL_PANEL_BUS:?}.service" "${KONTROL_PANEL_DESKTOP:?}"
+    rm -f "${USER_UNITS:?}/${KONTROL_PANEL_UNIT:?}" "${KONTROL_PANEL_DBUS_DIR:?}/${KONTROL_PANEL_BUS:?}.service" "${KONTROL_PANEL_DESKTOP:?}" \
+        "${KONTROL_PANEL_PROGRAM_DESKTOP:?}"
     rmdir --ignore-fail-on-non-empty "$KONTROL_PANEL_DBUS_DIR" "$(dirname "$KONTROL_PANEL_DBUS_DIR")" 2>/dev/null || true
     kbuildsycoca6 >/dev/null 2>&1 || true
     busctl --user call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus ReloadConfig >/dev/null 2>&1 || true
@@ -185,27 +206,37 @@ kglobalaccel() {
     busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel "$@"
 }
 
-take_launcher_keys() {
-    [[ -e $LAUNCHER_KEYS_STATE ]] && return 0
-    local reply codes kept=() code
-    reply=$(kglobalaccel shortcut as 4 "${PLASMA_LAUNCHER_ACTION[@]}")
-    mkdir -p "$(dirname "$LAUNCHER_KEYS_STATE")"
-    printf '%s\n' "$reply" >"$LAUNCHER_KEYS_STATE"
+release_foreign_keys() {
+    local state="$1" taken="$2" reply codes kept=() code
+    shift 2
+    reply=$(kglobalaccel shortcut as 4 "$@")
+    mkdir -p "$(dirname "$state")"
+    printf '%s\n' "$reply" >"$state"
     read -r -a codes <<<"${reply#ai }"
     for code in "${codes[@]:1}"; do
-        [[ " ${KONTROL_PANEL_KEYS[*]} " == *" $code "* ]] || kept+=("$code")
+        [[ " $taken " == *" $code "* ]] || kept+=("$code")
     done
-    kglobalaccel setForeignShortcut asai 4 "${PLASMA_LAUNCHER_ACTION[@]}" "${#kept[@]}" "${kept[@]}" >/dev/null
+    kglobalaccel setForeignShortcut asai 4 "$@" "${#kept[@]}" "${kept[@]}" >/dev/null
+}
+
+give_back_foreign_keys() {
+    local state="$1" codes
+    shift
+    [[ -f $state ]] || return 0
+    read -r -a codes <<<"$(sed 's/^ai //' "$state")"
+    kglobalaccel setForeignShortcut asai 4 "$@" "${codes[@]}" >/dev/null 2>&1 || true
+    rm -f "${state:?}"
+}
+
+take_launcher_keys() {
+    [[ -e $LAUNCHER_KEYS_STATE ]] && return 0
+    release_foreign_keys "$LAUNCHER_KEYS_STATE" "${KONTROL_PANEL_KEYS[*]}" "${PLASMA_LAUNCHER_ACTION[@]}"
     say "Meta and Alt+F1 open the Kontrol Panel"
 }
 
 restore_launcher_keys() {
     kglobalaccel unregister ss konveyor-kontrol-panel toggle >/dev/null 2>&1 || true
-    [[ -f $LAUNCHER_KEYS_STATE ]] || return 0
-    local codes
-    read -r -a codes <<<"$(sed 's/^ai //' "$LAUNCHER_KEYS_STATE")"
-    kglobalaccel setForeignShortcut asai 4 "${PLASMA_LAUNCHER_ACTION[@]}" "${codes[@]}" >/dev/null 2>&1 || true
-    rm -f "${LAUNCHER_KEYS_STATE:?}"
+    give_back_foreign_keys "$LAUNCHER_KEYS_STATE" "${PLASMA_LAUNCHER_ACTION[@]}"
 }
 
 install_plasmoid() {
@@ -224,9 +255,9 @@ copy_panel_ui() {
     shift 2
     mkdir -p "$target/contents/ui" "$target/contents/config"
     cp "$source/contents/ui/"*.qml "$target/contents/ui/"
-    local pattern
-    for pattern in "$@"; do
-        cp -r "$source/contents/ui/"$pattern "$target/contents/ui/"
+    local name
+    for name in "$@"; do
+        cp -r "$source/contents/ui/$name" "$target/contents/ui/"
     done
     cp "$source/contents/config/main.xml" "$source/contents/config/config.qml" "$target/contents/config/"
 }
@@ -240,7 +271,7 @@ install_plasmoids() {
         install_plasmoid "$plasmoid"
     done
     for plasmoid in "$root"/process-monitor/plasmoids/org.devl0rd.procmon*; do
-        [[ $plasmoid == */org.devl0rd.procmon.panel ]] || copy_panel_ui "$root/process-monitor/plasmoids/org.devl0rd.procmon.panel" "$plasmoid" "*.mjs"
+        [[ $plasmoid == */org.devl0rd.procmon.panel ]] || copy_panel_ui "$root/process-monitor/plasmoids/org.devl0rd.procmon.panel" "$plasmoid" proc.worker.mjs
         stage_lib "$plasmoid"
         install_plasmoid "$plasmoid"
     done
@@ -260,7 +291,7 @@ install_plasmoids() {
         case "$(basename "$plasmoid")" in
         org.devl0rd.portal)
             stage_lib "$plasmoid" "$root/portals/shared/lib"
-            rm -rf "$plasmoid/contents/ui/pages" "$plasmoid/contents/ui/shortcuts" "$plasmoid/contents/ui/settings"
+            rm -rf "$plasmoid/contents/ui/pages" "$plasmoid/contents/ui/search" "$plasmoid/contents/ui/shortcuts" "$plasmoid/contents/ui/settings"
             cp -r "$root/portals/shared/launcher/." "$plasmoid/contents/ui/"
             ;;
         org.devl0rd.portal.launcher)
@@ -273,6 +304,7 @@ install_plasmoids() {
         install_plasmoid "$plasmoid"
     done
     install_plasmoid "$root/screen-rotate/plasmoid"
+    install_plasmoid "$root/taskbar/plasmoids/org.devl0rd.taskbar"
 }
 
 install_games_shortcut() {
@@ -290,15 +322,18 @@ StartupNotify=false
 X-KDE-Shortcuts=Meta+G
 DESKTOP
     kbuildsycoca6 >/dev/null 2>&1 || true
-    local meta_g=268435527 grid_keys
-    grid_keys=$(busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel shortcut as 4 kwin "Grid View" KWin "Toggle Grid View" 2>/dev/null || true)
-    if [[ " $grid_keys " == *" $meta_g "* ]]; then
-        busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel setForeignShortcut asai 4 kwin "Grid View" KWin "Toggle Grid View" 0 >/dev/null
-        say "Freed Meta+G from KWin's Grid View"
-    fi
-    busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel doRegister as 4 "$GAMES_DESKTOP_ID" _launch "Kontrol Panel: Games" "Kontrol Panel: Games" >/dev/null
-    busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel setShortcut asaiu 4 "$GAMES_DESKTOP_ID" _launch "Kontrol Panel: Games" "Kontrol Panel: Games" 1 "$meta_g" 2 >/dev/null
+    kglobalaccel doRegister as 4 "${GAMES_ACTION[@]}" >/dev/null
+    [[ -e $GAMES_KEYS_STATE ]] && return 0
+    release_foreign_keys "$GAMES_KEYS_STATE" "$META_G" "${GRID_VIEW_ACTION[@]}"
+    kglobalaccel setShortcut asaiu 4 "${GAMES_ACTION[@]}" 1 "$META_G" 2 >/dev/null
     say "Meta+G opens the Kontrol Panel on Games"
+}
+
+remove_games_shortcut() {
+    kglobalaccel unregister ss "$GAMES_DESKTOP_ID" _launch >/dev/null 2>&1 || true
+    give_back_foreign_keys "$GAMES_KEYS_STATE" "${GRID_VIEW_ACTION[@]}"
+    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/$GAMES_DESKTOP_ID"
+    kbuildsycoca6 >/dev/null 2>&1 || true
 }
 
 remove_keyboard_toggle() {
@@ -309,9 +344,15 @@ remove_keyboard_toggle() {
     rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/linux-plasma-keyboard-toggle"
 }
 
+start_plasma() {
+    systemctl --user reset-failed "$PLASMA_SERVICE" 2>/dev/null || true
+    systemctl --user start "$PLASMA_SERVICE"
+}
+
 take_over_launcher_and_restart() {
     say "Restarting Plasma"
     systemctl --user stop "$PLASMA_SERVICE"
+    trap start_plasma EXIT
     python3 "$WIDGETS_DIR/service/overlay-hosts" install "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
     if [[ ! -e $LAUNCHER_SET_UP ]]; then
         python3 "$WIDGETS_DIR/service/panel-launcher" install "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
@@ -320,6 +361,12 @@ take_over_launcher_and_restart() {
         kwriteconfig6 --file "$KONTROL_PANEL_CONFIG" --group General --key openPageOnStart shortcuts
         systemctl --user restart "$KONTROL_PANEL_UNIT"
     fi
-    systemctl --user reset-failed "$PLASMA_SERVICE" 2>/dev/null || true
-    systemctl --user start "$PLASMA_SERVICE"
+    if [[ ! -e $TASKBAR_SET_UP ]]; then
+        python3 "$WIDGETS_DIR/service/panel-taskbar" install "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
+        mkdir -p "$(dirname "$TASKBAR_SET_UP")"
+        touch "$TASKBAR_SET_UP"
+    fi
+    python3 "$WIDGETS_DIR/service/panel-taskbar" settings "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc" "$CONFIG_HOME/konveyor/taskbarrc"
+    trap - EXIT
+    start_plasma
 }

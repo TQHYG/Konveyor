@@ -19,6 +19,7 @@ std::atomic<quint64> s_nextColumnId {1};
 
 Column::Column(Tile tile, const AreaInfo &area, ColumnWidth width, bool fillsWidth)
     : widthSetting(width)
+    , defaultedWidth(width)
     , fillsWidth(fillsWidth)
     , displayStyle(tile.window().rules().defaultColumnDisplay.value_or(tile.options()->layout.defaultColumnDisplay))
     , tabBar(tile.options()->layout.tabIndicator)
@@ -27,15 +28,9 @@ Column::Column(Tile tile, const AreaInfo &area, ColumnWidth width, bool fillsWid
     , m_options(tile.options())
     , m_id(s_nextColumnId++)
 {
-    const auto &presets = m_options->layout.presetColumnWidths;
-    const auto match
-        = std::ranges::find_if(presets, [&](const Config::PresetSize &preset) { return ColumnWidth::fromPreset(preset) == width; });
-    if (match != presets.end()) {
-        presetWidthIndex = static_cast<std::size_t>(std::distance(presets.begin(), match));
-    }
-
     const WindowMode pending = tile.window().requestedMode();
     insertTile(0, std::move(tile));
+    presetWidthIndex = presetIndexOf(width);
     if (pending == WindowMode::Maximized) {
         setMaximized(true);
     } else if (pending == WindowMode::Fullscreen) {
@@ -45,6 +40,20 @@ Column::Column(Tile tile, const AreaInfo &area, ColumnWidth width, bool fillsWid
     if (isTabbed() && !m_options->layout.tabIndicator.hideWhenSingleTab && sizingMode() == WindowMode::Normal) {
         tabBar.animateOpening(m_clock, m_options->animations.windowMovement);
     }
+}
+
+std::optional<std::size_t> Column::presetIndexOf(ColumnWidth width) const
+{
+    const auto &presets = m_options->layout.presetColumnWidths;
+    const double target = widthInPixels(width);
+    for (qsizetype i = 0; i < presets.size(); ++i) {
+        const PresetExtent resolved = presetWidthExtent(presets[i]);
+        const double tileWidth = resolved.isTile ? resolved.value : tiles.front().outerWidthFor(resolved.value);
+        if (std::abs(tileWidth - target) < 0.5) {
+            return static_cast<std::size_t>(i);
+        }
+    }
+    return std::nullopt;
 }
 
 void TileSizing::update(const Tile &tile)
@@ -207,7 +216,8 @@ void Column::insertTile(std::size_t idx, Tile tile)
         maximizePending = false;
     }
 
-    TileSizing tileData {WindowHeight::autoWeight(1.0), false};
+    TileSizing tileData {insertedHeight(tile), false};
+    tile.carriedHeight.reset();
     tileData.update(tile);
     const auto offset = static_cast<std::ptrdiff_t>(idx);
     data.insert(data.begin() + offset, tileData);

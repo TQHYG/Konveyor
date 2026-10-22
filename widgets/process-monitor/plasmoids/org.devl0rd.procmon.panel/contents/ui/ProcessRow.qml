@@ -20,7 +20,9 @@ Rectangle {
     readonly property bool open: root.expandedPid === pid
     readonly property real rowHeight: Kirigami.Units.gridUnit * 1.75
     readonly property string query: root.searchText.trim()
-    property string commandLine
+    property int commandLinePid
+    property string commandLineText
+    readonly property string commandLine: commandLinePid === pid ? commandLineText : ""
     signal menuRequested(var proc)
 
     implicitHeight: rowHeight + (open && details.item ? details.item.implicitHeight + Kirigami.Units.smallSpacing * 2 : 0)
@@ -34,8 +36,15 @@ Rectangle {
     Behavior on implicitHeight { NumberAnimation { duration: 220; easing.type: Easing.OutCubic } }
 
     onOpenChanged: {
-        if (open)
-            root.readCommand(root.commandLineCommand(pid), text => row.commandLine = text)
+        if (!open)
+            return
+        const target = pid
+        root.actions.readCommand(root.actions.commandLineCommand(target), text => {
+            if (row.pid !== target)
+                return
+            row.commandLinePid = target
+            row.commandLineText = text
+        })
     }
 
     MouseArea {
@@ -220,12 +229,12 @@ Rectangle {
             PopActions {
                 showText: true
                 model: [
-                    { icon: "process-stop", text: i18n("End"), run: () => root.signalProc(row.pid, "TERM") },
-                    { icon: "process-stop", text: i18n("Force kill"), destructive: true, run: () => root.signalProc(row.pid, "KILL") },
-                    { icon: "media-playback-pause", text: i18n("Pause"), run: () => root.signalProc(row.pid, "STOP") },
-                    { icon: "media-playback-start", text: i18n("Resume"), run: () => root.signalProc(row.pid, "CONT") },
-                    { icon: "folder-open", text: i18n("Open location"), run: () => root.openLocation(row.pid) },
-                    { icon: "edit-copy", text: i18n("Copy command"), run: () => root.copyText(row.commandLine) },
+                    { icon: "process-stop", text: i18n("End"), run: () => root.actions.signalProc(row.pid, "TERM") },
+                    { icon: "process-stop", text: i18n("Force kill"), destructive: true, run: () => root.actions.signalProc(row.pid, "KILL") },
+                    { icon: "media-playback-pause", text: i18n("Pause"), run: () => root.actions.signalProc(row.pid, "STOP") },
+                    { icon: "media-playback-start", text: i18n("Resume"), run: () => root.actions.signalProc(row.pid, "CONT") },
+                    { icon: "folder-open", text: i18n("Open location"), run: () => root.actions.openLocation(row.pid) },
+                    { icon: "edit-copy", text: i18n("Copy command"), run: () => root.actions.copyText(row.commandLine) },
                     { icon: "overflow-menu", text: i18n("More…"), run: () => row.menuRequested(row.proc) }
                 ]
             }

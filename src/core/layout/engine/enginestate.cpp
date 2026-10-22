@@ -3,6 +3,7 @@
 #include "layout/common/geometry.h"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace Konveyor::Layout
@@ -58,16 +59,25 @@ std::optional<QSizeF> nonZeroSize(QSize size)
 namespace
 {
 
+int stackingOrder(const Column &column, std::size_t tile)
+{
+    if (!column.isTabbed() || tile < column.activeTileIndex) {
+        return static_cast<int>(tile);
+    }
+    return tile == column.activeTileIndex ? static_cast<int>(column.tiles.size()) - 1 : static_cast<int>(tile) - 1;
+}
+
 QHash<WindowId, TileIndex> collectIndices(const Workspace &workspace)
 {
     QHash<WindowId, TileIndex> indices;
     int stacking = 0;
     const std::vector<Column> &columns = workspace.scrolling().columns();
     for (std::size_t c = 0; c < columns.size(); ++c) {
-        for (std::size_t t = 0; t < columns[c].tiles.size(); ++t) {
-            indices.insert(columns[c].tiles[t].id(), {static_cast<int>(c), static_cast<int>(t), stacking});
-            stacking += 1;
+        const Column &column = columns[c];
+        for (std::size_t t = 0; t < column.tiles.size(); ++t) {
+            indices.insert(column.tiles[t].id(), {static_cast<int>(c), static_cast<int>(t), stacking + stackingOrder(column, t)});
         }
+        stacking += static_cast<int>(column.tiles.size());
     }
     const std::vector<Tile> &floating = workspace.floating().tiles();
     for (std::size_t i = floating.size(); i > 0; --i) {
@@ -80,7 +90,7 @@ QHash<WindowId, TileIndex> collectIndices(const Workspace &workspace)
 TabBarState tabBarFor(const Column &column, const Workspace &workspace, QPointF columnOrigin)
 {
     TabBarState state;
-    if (!column.isTabbed() || !column.tabBar.isShown(column.tiles.size())) {
+    if (!column.isTabbed() || column.sizingMode() != WindowMode::Normal || !column.tabBar.isShown(column.tiles.size())) {
         return state;
     }
     const double scale = workspace.area().scale;
@@ -90,6 +100,7 @@ TabBarState tabBarFor(const Column &column, const Workspace &workspace, QPointF 
     const Config::Border border = tabIndicatorBorder(column.tabBar.config(), workspace.options()->layout.focusRing);
     for (const QRectF &rect : column.tabBar.tabRects(area, column.tiles.size(), scale)) {
         state.tabRects.append(rect.translated(columnOrigin));
+        state.tabRadii.append(column.tabBar.cornerRadius(rect));
     }
     for (std::size_t i = 0; i < column.tiles.size(); ++i) {
         const LayoutWindow &window = column.tiles[i].window();
@@ -126,13 +137,14 @@ WindowState buildWindowState(
     state.isActive = window.isActivated();
     state.isFocused = window.isFocused();
     state.isUrgent = window.isUrgent();
+    state.onAllDesktops = window.properties().onAllDesktops;
+    state.wantsAllDesktops = window.rules().openOnAllWorkspaces.value_or(false);
     state.sizingMode = tile.sizingMode();
     state.requestedSizingMode = window.requestedMode();
     state.isWindowedFullscreen = window.windowedFullscreenRequested();
     state.requestedMinSize = nonZeroSize(window.minSize());
     state.requestedMaxSize = nonZeroSize(window.maxSize());
-    const bool coversOutput = !state.isWindowedFullscreen
-        && (state.sizingMode == WindowMode::Fullscreen || state.requestedSizingMode == WindowMode::Fullscreen);
+    const bool coversOutput = state.sizingMode == WindowMode::Fullscreen || state.requestedSizingMode == WindowMode::Fullscreen;
     state.focusRing = decorationFor(tile.focusRingConfig(), window.isActivated() && !coversOutput, window.isUrgent(), true);
     state.border
         = decorationFor(tile.borderConfig(), tile.borderThickness().has_value() && !coversOutput, window.isUrgent(), window.isActivated());
@@ -156,7 +168,8 @@ QList<WindowState> Engine::windowStates() const
     QList<WindowState> states;
     for (std::size_t monitorIndex = 0; monitorIndex < d->monitors.size(); ++monitorIndex) {
         const Monitor &monitor = d->monitors[monitorIndex];
-        const std::vector<double> renderOffsets = monitor.workspaceRenderOffsets();
+        const std::vector<double> renderOffsets = d->workspaceRenderOffsets(monitor);
+        const bool workspaceMotion = d->usesWorkspaceMotion(monitor);
         const double heightWithGap = monitor.workspaceHeightWithGap();
         const QPointF origin = d->originOf(monitor.outputName());
         const double viewHeight = monitor.area().viewSize.height();
@@ -166,11 +179,12 @@ QList<WindowState> Engine::windowStates() const
             WorkspaceRenderContext context;
             context.origin = origin;
             context.renderY = renderOffsets[idx];
-            context.targetY = (static_cast<double>(idx) - static_cast<double>(monitor.activeWorkspaceIndex())) * heightWithGap;
+            context.targetY
+                = workspaceMotion ? (static_cast<double>(idx) - static_cast<double>(monitor.activeWorkspaceIndex())) * heightWithGap : 0.0;
             context.output = monitor.outputName();
             context.index = static_cast<int>(idx) + 1;
             context.onActive = idx == monitor.activeWorkspaceIndex();
-            context.visible = context.onActive || (context.renderY > -viewHeight && context.renderY < viewHeight);
+            context.visible = context.onActive || (workspaceMotion && context.renderY > -viewHeight && context.renderY < viewHeight);
             d->appendWorkspaceStates(states, workspace, context);
         }
     }
@@ -222,6 +236,7 @@ void applyTabBars(QList<WindowState> &states, const Workspace &workspace, const 
         for (WindowState &state : states) {
             if (state.id == active) {
                 state.tabBar = indicator;
+                state.tabBar.visible = indicator.visible && context.visible;
             }
         }
     }
@@ -254,7 +269,7 @@ void applyStackingState(WindowState &state, const Tile &tile, const TileIndex &i
 {
     const bool fullscreen = tile.sizingMode() == WindowMode::Fullscreen;
     const int ownIndex = fullscreen ? BackgroundFullscreenStackingIndex : index.stacking;
-    state.stackingIndex = fullscreen && state.isActive ? FullscreenStackingIndex : ownIndex;
+    state.stackingIndex = fullscreen && state.isActive && state.visible ? FullscreenStackingIndex : ownIndex;
 }
 
 }
@@ -309,6 +324,12 @@ QList<WorkspaceState> Engine::workspaceStates() const
             state.isFocused = state.isActive && monitorIndex == d->activeMonitorIndex;
             state.isUrgent = workspace.isUrgent();
             state.activeWindow = workspace.activeWindow();
+            for (const Column &column : workspace.scrolling().columns()) {
+                QList<WindowId> &ids = state.columns.emplaceBack();
+                std::ranges::transform(column.tiles, std::back_inserter(ids), &Tile::id);
+                state.columnDisplays.append(column.displayStyle);
+            }
+            state.groupAppWindows = workspace.options()->layout.groupAppWindows;
             states.append(state);
         }
     }
@@ -321,10 +342,11 @@ QList<OutputState> Engine::outputStates() const
     for (const Monitor &monitor : d->monitors) {
         OutputState state;
         state.name = monitor.outputName();
-        state.transitionProgress = monitor.transitionProgress();
+        state.transitionProgress
+            = d->usesWorkspaceMotion(monitor) ? monitor.transitionProgress() : static_cast<double>(monitor.activeWorkspaceIndex());
         const Config::InsertHint &hint = monitor.options()->layout.insertHint;
         state.dropHintPaint = {hint.paint.source, hint.paint.color, hint.paint.gradient};
-        state.backgroundColor = monitor.options()->layout.backgroundColor;
+        state.backgroundColor = monitor.activeWorkspace().options()->layout.backgroundColor;
         state.dropHint = d->dropHintRect(monitor);
         states.append(state);
     }
@@ -348,7 +370,7 @@ std::optional<QRectF> Engine::Private::dropHintRect(const Monitor &monitor) cons
     if (!area) {
         return std::nullopt;
     }
-    const std::vector<double> offsets = monitor.workspaceRenderOffsets();
+    const std::vector<double> offsets = workspaceRenderOffsets(monitor);
     return area->translated(originOf(monitor.outputName()) + QPointF(0.0, offsets[*idx]));
 }
 
@@ -357,42 +379,12 @@ std::optional<WindowId> Engine::focusedWindow() const
     return d->focused;
 }
 
-std::optional<WindowId> Engine::windowAt(const QPointF &globalPos) const
+std::optional<WindowId> Engine::movingWindow() const
 {
-    for (const Monitor &monitor : d->monitors) {
-        const QPointF origin = d->originOf(monitor.outputName());
-        const QRectF geometry(origin, monitor.area().viewSize);
-        if (!geometry.contains(globalPos)) {
-            continue;
-        }
-        const QPointF local = globalPos - origin;
-        const std::vector<double> offsets = monitor.workspaceRenderOffsets();
-        for (std::size_t idx = 0; idx < monitor.workspaces().size(); ++idx) {
-            const auto id = monitor.workspaces()[idx].windowUnder(local - QPointF(0.0, offsets[idx]));
-            if (id) {
-                return id;
-            }
-        }
+    if (!d->windowDrag || !d->windowDrag->moving) {
+        return std::nullopt;
     }
-    return std::nullopt;
-}
-
-QString Engine::checkConsistency() const
-{
-    for (const Monitor &monitor : d->monitors) {
-        if (const QString error = monitor.checkConsistency(); !error.isEmpty()) {
-            return error;
-        }
-    }
-    if (!d->monitors.empty() && d->activeMonitorIndex >= d->monitors.size()) {
-        return QStringLiteral("engine: active monitor index out of range");
-    }
-    for (const Workspace &workspace : d->orphanWorkspaces) {
-        if (const QString error = workspace.checkConsistency(); !error.isEmpty()) {
-            return error;
-        }
-    }
-    return {};
+    return d->windowDrag->window;
 }
 
 }

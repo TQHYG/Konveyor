@@ -1,5 +1,6 @@
 #pragma once
 
+#include "anim/duration.h"
 #include "config/types.h"
 #include "layout/engine/windowmemory.h"
 
@@ -8,6 +9,7 @@
 #include <QRectF>
 #include <QSizeF>
 #include <QString>
+#include <QStringList>
 
 #include <functional>
 #include <memory>
@@ -23,6 +25,13 @@ namespace Konveyor::Layout
 
 using WindowId = quint64;
 using WorkspaceId = quint64;
+
+struct WindowHit
+{
+    WindowId id = 0;
+    bool onTab = false;
+    bool operator==(const WindowHit &) const = default;
+};
 
 struct OutputInfo
 {
@@ -46,6 +55,7 @@ struct WindowProperties
     bool isResizable = true;
     bool wantsFullscreen = false;
     bool wantsMaximized = false;
+    bool onAllDesktops = false;
     QSizeF frameSize;
     bool operator==(const WindowProperties &) const = default;
 };
@@ -94,6 +104,7 @@ struct TabBarState
     bool visible = false;
     QRectF rect;
     QList<QRectF> tabRects;
+    QList<Config::CornerRadius> tabRadii;
     QList<ResolvedPaint> tabPaints;
     bool operator==(const TabBarState &) const = default;
 };
@@ -117,6 +128,8 @@ struct WindowState
     bool isActive = false;
     bool isFocused = false;
     bool isUrgent = false;
+    bool onAllDesktops = false;
+    bool wantsAllDesktops = false;
     WindowMode sizingMode = WindowMode::Normal;
     WindowMode requestedSizingMode = WindowMode::Normal;
     bool isWindowedFullscreen = false;
@@ -140,9 +153,16 @@ struct RestorePlacement
 {
     WorkspaceId workspace = 0;
     bool isFloating = false;
+    bool isWindowedFullscreenFallback = false;
+    bool returnsToFloating = false;
+    WindowMode requestedSizingMode = WindowMode::Normal;
+    std::optional<QSize> savedFloatingSize;
+    std::optional<QPointF> savedFloatingPosition;
     std::size_t columnIndex = 0;
     std::optional<std::size_t> tileIndex;
     ColumnWidth width;
+    bool fillsWidth = false;
+    std::optional<Config::ColumnDisplay> columnDisplay;
     QRectF floatingFrame;
 };
 
@@ -156,6 +176,9 @@ struct WorkspaceState
     bool isFocused = false;
     bool isUrgent = false;
     std::optional<WindowId> activeWindow;
+    QList<QList<WindowId>> columns;
+    QList<Config::ColumnDisplay> columnDisplays;
+    Config::GroupAppWindows groupAppWindows = Config::GroupAppWindows::Beside;
     bool operator==(const WorkspaceState &) const = default;
 };
 
@@ -179,9 +202,11 @@ struct Hooks
 {
     std::function<void(WindowId)> closeWindow;
     std::function<void(const QString &)> spawn;
+    std::function<void(const QString &, const QStringList &)> runWidgetTool;
     std::function<void()> toggleOverview;
     std::function<void(bool)> setOverviewOpen;
     std::function<void(const QString &)> compositorAction;
+    std::function<void(quint64)> focusTaskbarItem;
     std::function<void(WindowId)> focusWindow;
     std::function<void()> windowMemoryChanged;
 };
@@ -195,6 +220,7 @@ public:
     Engine &operator=(const Engine &) = delete;
 
     void setConfig(const Config::Config &config);
+    void setNativeDesktopPresentation(bool enabled);
 
     void addOutput(const OutputInfo &output);
     void updateOutput(const OutputInfo &output);
@@ -218,6 +244,7 @@ public:
     bool wantsWindow(const WindowProperties &properties) const;
 
     ActionResult perform(const Config::Action &action, std::optional<WindowId> target = {});
+    void runWidgetTool(const QString &name, const QStringList &arguments) const;
 
     void beginSwipe(const QString &output, bool isTouchpad);
     void updateSwipe(double delta, qint64 timestampMs, bool isTouchpad);
@@ -228,8 +255,9 @@ public:
 
     bool beginWindowDrag(WindowId id, const QPointF &pointer);
     void updateWindowDrag(const QPointF &pointer, const QString &output);
-    void toggleWindowDragFloating();
+    bool toggleWindowDragFloating();
     void endWindowDrag();
+    void cancelWindowDrag();
     bool beginResize(WindowId id, quint8 edges);
     void updateResize(const QPointF &delta);
     void endResize();
@@ -245,12 +273,16 @@ public:
     QList<WorkspaceState> workspaceStates() const;
     QList<OutputState> outputStates() const;
     std::optional<WindowId> focusedWindow() const;
+    std::optional<WindowId> movingWindow() const;
     std::optional<WindowId> windowAt(const QPointF &globalPos) const;
+    std::optional<WindowHit> hitAt(const QPointF &globalPos) const;
 
     void focusWorkspace(const QString &output, int index);
     void setWindowMemory(const WindowMemory &memory);
     const WindowMemory &windowMemory() const;
     bool isOverviewOpen() const;
+    Anim::Duration timeUntilStartupEnds() const;
+    void refreshRules();
     void setOverviewOpen(bool open);
 
     QString checkConsistency() const;

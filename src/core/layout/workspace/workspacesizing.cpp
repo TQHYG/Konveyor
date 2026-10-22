@@ -9,6 +9,15 @@
 namespace Konveyor::Layout
 {
 
+void Workspace::setLayoutOverride(std::optional<Config::LayoutPart> layoutOverride)
+{
+    if (m_layoutOverride == layoutOverride) {
+        return;
+    }
+    m_layoutOverride = std::move(layoutOverride);
+    applyOptions();
+}
+
 void Workspace::addToAppStack(const std::vector<std::size_t> &appColumns, Tile tile, bool activate, std::size_t maxRows)
 {
     tile.returnsToFloating = false;
@@ -63,8 +72,20 @@ ColumnWidth Workspace::tiledWidthFor(const LayoutWindow &window, const std::opti
     return ColumnWidth::fixed(fixed);
 }
 
+void Workspace::clearWindowedFullscreenFallbacks()
+{
+    for (const TileRef &ref : renderedTilesMut(false)) {
+        if (ref.tile->isWindowedFullscreenFallback) {
+            setFullscreen(ref.tile->id(), false);
+        }
+    }
+}
+
 void Workspace::setSizingMode(WindowId window, bool enable, bool maximize)
 {
+    if (Tile *tile = tileFor(window)) {
+        tile->clearWindowedFullscreenFallback();
+    }
     bool returnsToFloating = false;
     if (m_floating.hasWindow(window)) {
         if (!enable) {
@@ -124,6 +145,12 @@ void Workspace::cycleExpansion(WindowId window)
         setMaximized(window, false);
         return;
     }
+    const bool expandedAlone
+        = column->expandedAlone && column->tileAreaWidth() + 0.5 >= column->widthInPixels(ColumnWidth::proportion(1.0));
+    if (!column->fillsWidth && expandedAlone) {
+        setMaximized(window, true);
+        return;
+    }
     const bool wasFullWidth = column->fillsWidth;
     m_strip.toggleFillWidth();
     if (wasFullWidth) {
@@ -131,33 +158,15 @@ void Workspace::cycleExpansion(WindowId window)
     }
 }
 
-void Workspace::toggleWidth(bool forwards, bool fromNative)
+void Workspace::toggleFillWidth(std::optional<WindowId> window)
 {
-    if (isFloatingFocused()) {
-        m_floating.toggleWindowWidth(std::nullopt, forwards, fromNative);
-    } else {
-        m_strip.toggleWidth(forwards, fromNative);
+    if (targetIsFloating(window)) {
+        return;
     }
-}
-
-void Workspace::toggleFillWidth()
-{
-    if (!isFloatingFocused()) {
+    if (window) {
+        m_strip.toggleFillWidthFor(*window);
+    } else {
         m_strip.toggleFillWidth();
-    }
-}
-
-void Workspace::toggleFillWidthFor(WindowId window)
-{
-    m_strip.toggleFillWidthFor(window);
-}
-
-void Workspace::setColumnWidth(SizeChange change)
-{
-    if (isFloatingFocused()) {
-        m_floating.setWindowWidth(std::nullopt, change, true);
-    } else {
-        m_strip.setWindowWidth(std::nullopt, change);
     }
 }
 
@@ -186,12 +195,12 @@ void Workspace::resetWindowHeight(std::optional<WindowId> window)
     }
 }
 
-void Workspace::toggleWindowWidth(std::optional<WindowId> window, bool forwards)
+void Workspace::toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative)
 {
     if (targetIsFloating(window)) {
-        m_floating.toggleWindowWidth(window, forwards);
+        m_floating.toggleWindowWidth(window, forwards, fromNative);
     } else {
-        m_strip.toggleWindowWidth(window, forwards);
+        m_strip.toggleWindowWidth(window, forwards, fromNative);
     }
 }
 

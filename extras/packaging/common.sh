@@ -1,16 +1,26 @@
 #!/usr/bin/env bash
 
+KONVEYOR_SYSTEM_ROOT="${KONVEYOR_SYSTEM_ROOT:-}"
+KONVEYOR_OS_RELEASE="$KONVEYOR_SYSTEM_ROOT/etc/os-release"
 KONVEYOR_ATOMIC=false
 KONVEYOR_BUILD_BOX=""
 KONVEYOR_BUILD_ENV=()
-if [[ -e /run/ostree-booted ]]; then
+if [[ -e $KONVEYOR_SYSTEM_ROOT/run/ostree-booted ]]; then
     KONVEYOR_ATOMIC=true
-    KONVEYOR_BUILD_BOX="konveyor-fedora-$(. /etc/os-release && printf '%s' "$VERSION_ID")"
+    KONVEYOR_BUILD_BOX="konveyor-fedora-$(. "$KONVEYOR_OS_RELEASE" && printf '%s' "$VERSION_ID")"
     KONVEYOR_BUILD_ENV=(toolbox run --container "$KONVEYOR_BUILD_BOX")
-elif [[ $(. /etc/os-release && printf '%s' "$ID") == steamos ]]; then
+elif [[ $(. "$KONVEYOR_OS_RELEASE" && printf '%s' "$ID") == steamos ]]; then
     KONVEYOR_ATOMIC=true
     KONVEYOR_BUILD_BOX="konveyor-steamos"
     KONVEYOR_BUILD_ENV=(distrobox enter "$KONVEYOR_BUILD_BOX" --)
+fi
+KONVEYOR_OPTIONS_FILE="$HOME/.local/state/konveyor/install-options"
+KONVEYOR_RECORDED_PREFIX="$(dirname "${BASH_SOURCE[0]}")/install-prefix"
+if [[ -z ${KONVEYOR_PREFIX:-} && -r $KONVEYOR_RECORDED_PREFIX ]]; then
+    KONVEYOR_PREFIX=$(<"$KONVEYOR_RECORDED_PREFIX")
+fi
+if [[ -z ${KONVEYOR_PREFIX:-} && -r $KONVEYOR_OPTIONS_FILE ]]; then
+    KONVEYOR_PREFIX=$(sed -n 's/^prefix=//p' "$KONVEYOR_OPTIONS_FILE")
 fi
 if $KONVEYOR_ATOMIC; then
     KONVEYOR_PREFIX="${KONVEYOR_PREFIX:-$HOME/.local}"
@@ -18,6 +28,8 @@ fi
 KONVEYOR_PREFIX="${KONVEYOR_PREFIX:-/usr}"
 KONVEYOR_STATE_DIR="$KONVEYOR_PREFIX/share/konveyor"
 KONVEYOR_BUILT_FOR="$KONVEYOR_STATE_DIR/built-for"
+KONVEYOR_BUILD_FAILED="$KONVEYOR_STATE_DIR/build-failed"
+KONVEYOR_REBUILD_LOCK="$KONVEYOR_STATE_DIR/rebuild.lock"
 KONVEYOR_PULLED_IMAGES="$KONVEYOR_STATE_DIR/pulled-images"
 KONVEYOR_PLUGIN_DIR=""
 KONVEYOR_SESSION_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/konveyor.conf"
@@ -111,7 +123,7 @@ as_owner() {
 }
 
 owner_session_running() {
-    [[ -S /run/user/$(id -u "${KONVEYOR_OWNER:-$(id -un)}")/bus ]]
+    [[ -S $KONVEYOR_SYSTEM_ROOT/run/user/$(id -u "${KONVEYOR_OWNER:-$(id -un)}")/bus ]]
 }
 
 notify_owner() {
@@ -130,7 +142,7 @@ kwin_loaded_effects() {
 
 library_version() {
     local library
-    library=$(find /usr/lib /usr/lib64 -maxdepth 2 -name "$1.so.6" -print -quit 2>/dev/null)
+    library=$(find "$KONVEYOR_SYSTEM_ROOT/usr/lib" "$KONVEYOR_SYSTEM_ROOT/usr/lib64" -maxdepth 2 -name "$1.so.6" -print -quit 2>/dev/null)
     [[ -n $library ]] && basename "$(readlink -f "$library")" | sed "s/^$1\.so\.//"
 }
 
@@ -140,16 +152,16 @@ kwin_version() {
 
 kwin_headers_version() {
     local file
-    file=$(find /usr/lib /usr/lib64 -maxdepth 4 -path '*/cmake/KWin/KWinConfigVersion.cmake' -print -quit 2>/dev/null)
+    file=$(find "$KONVEYOR_SYSTEM_ROOT/usr/lib" "$KONVEYOR_SYSTEM_ROOT/usr/lib64" -maxdepth 4 -path '*/cmake/KWin/KWinConfigVersion.cmake' -print -quit 2>/dev/null)
     [[ -n $file ]] && sed -n 's/^set(PACKAGE_VERSION "\(.*\)")$/\1/p' "$file"
 }
 
 system_fingerprint() {
     printf 'kwin=%s\n' "$(kwin_version)"
     printf 'qt=%s\n' "$(library_version libQt6Core)"
-    printf 'containment=%s\n' "$(find /usr/share/plasma/plasmoids/org.kde.desktopcontainment -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)"
+    printf 'containment=%s\n' "$(find "$KONVEYOR_SYSTEM_ROOT/usr/share/plasma/plasmoids/org.kde.desktopcontainment" -type f -print0 2>/dev/null | LC_ALL=C sort -z | xargs -0r sha256sum | sha256sum | cut -d' ' -f1)"
     if $KONVEYOR_ATOMIC; then
-        printf 'image=%s\n' "$(. /etc/os-release && printf '%s' "${OSTREE_VERSION:-$BUILD_ID}")"
+        printf 'image=%s\n' "$(. "$KONVEYOR_OS_RELEASE" && printf '%s' "${OSTREE_VERSION:-$BUILD_ID}")"
     fi
 }
 
@@ -163,7 +175,7 @@ kwinrc_delete() {
 
 kwin_script_installed() {
     local directory
-    for directory in "${XDG_DATA_HOME:-$HOME/.local/share}" /usr/local/share /usr/share; do
+    for directory in "${XDG_DATA_HOME:-$HOME/.local/share}" "$KONVEYOR_SYSTEM_ROOT/usr/local/share" "$KONVEYOR_SYSTEM_ROOT/usr/share"; do
         [[ -d $directory/kwin/scripts/$1 || -d $directory/kwin-wayland/scripts/$1 ]] && return 0
     done
     return 1

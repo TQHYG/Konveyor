@@ -14,29 +14,22 @@ namespace
 
 std::atomic<quint64> s_nextWorkspaceId {1};
 
-std::optional<Config::Layout> layoutOf(const std::optional<Config::NamedWorkspace> &config)
+std::optional<Config::LayoutPart> layoutOf(const std::optional<Config::NamedWorkspace> &config)
 {
     return config ? config->layout : std::nullopt;
 }
 
-OptionsPtr resolveOptions(const OptionsPtr &base, const std::optional<Config::Layout> &part, double scale)
+OptionsPtr resolveOptions(const OptionsPtr &base, const std::optional<Config::LayoutPart> &part, double scale)
 {
-    return makeOptions(scaledFor(withLayoutOverride(*base, part), scale));
+    return makeOptions(scaledFor(withLayoutPart(*base, part), scale));
 }
 
-}
-
-bool outputMatches(const OutputArea &area, const QString &reference)
-{
-    if (reference.isEmpty()) {
-        return false;
-    }
-    return reference.compare(area.outputName, Qt::CaseInsensitive) == 0 || reference.compare(area.outputId, Qt::CaseInsensitive) == 0;
 }
 
 Workspace::Workspace(
     const OutputArea &area, const Anim::Clock &clock, OptionsPtr globalOptions, std::optional<Config::NamedWorkspace> config)
     : m_homeOutput(config && config->openOnOutput ? *config->openOnOutput : area.outputId)
+    , m_homeConnector(config && config->openOnOutput ? QString() : area.outputName)
     , m_name(config ? config->name : QString())
     , m_area(area)
     , m_clock(clock)
@@ -46,7 +39,9 @@ Workspace::Workspace(
     , m_strip(area.viewSize, area.workingArea, area.scale, clock, m_options)
     , m_floating(area.viewSize, area.workingArea, area.scale, clock, m_options)
     , m_id(s_nextWorkspaceId++)
-{ }
+{
+    resolveHomeByConnector();
+}
 
 void Workspace::applyOptions()
 {
@@ -66,15 +61,20 @@ void Workspace::setOutput(const OutputArea &area)
     if (m_area == area) {
         return;
     }
+    if (m_area.outputName != area.outputName) {
+        clearWindowedFullscreenFallbacks();
+    }
     m_area = area;
-    if (outputMatches(m_area, m_homeOutput)) {
-        m_homeOutput = m_area.outputId;
+    resolveHomeByConnector();
+    if (homeAffinity(m_area) == 2) {
+        m_homeUnplugged = false;
     }
     applyOptions();
 }
 
 void Workspace::clearOutput()
 {
+    clearWindowedFullscreenFallbacks();
     m_area.outputName.clear();
     m_area.outputId.clear();
 }
@@ -346,11 +346,11 @@ std::optional<QPointF> Workspace::tileRenderPosition(WindowId id) const
     return std::nullopt;
 }
 
-std::optional<WindowId> Workspace::windowUnder(QPointF pos) const
+std::optional<WindowHit> Workspace::windowUnder(QPointF pos) const
 {
     if (showsFloating()) {
         if (const auto id = m_floating.windowUnder(pos)) {
-            return id;
+            return WindowHit {*id, false};
         }
     }
     return m_strip.windowUnder(pos);

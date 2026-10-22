@@ -24,7 +24,7 @@ PLASMOIDS=(
     org.devl0rd.routermon.clients org.devl0rd.routermon.speedtest org.devl0rd.routermon.panel org.devl0rd.routermon.overlay
     org.devl0rd.logmon.journal
     org.devl0rd.portal org.devl0rd.portal.friends org.devl0rd.portal.launcher
-    dev.devl0rd.screenrotate
+    dev.devl0rd.screenrotate org.devl0rd.taskbar
 )
 COMMANDS=(sysmon-collect procmon-collect routermon-collect routermon-ctl routermon-config routermon-speedtest logmon-collect
     portal-games portal-packages portal-launcher portal-friends monitor-overlay linux-plasma-screen-rotate)
@@ -34,21 +34,9 @@ RUNTIME_DIRS=(Linux-System-Monitor Linux-Process-Mon Linux-Router-Monitor Linux-
 
 remove_router_collector() {
     [[ -f $CONFIG_HOME/Linux-Router-Monitor/config.json ]] || return 0
-    local host user key remote
-    host=$(read_router_config host)
-    user=$(read_router_config user)
-    key=$(read_router_config ssh_key)
-    remote=$(read_router_config remote_script /jffs/lrm-collect.sh)
-    key="${key/#\~/$HOME}"
-    [[ -n $host && -n $key ]] || return 0
-    ssh -o BatchMode=yes -o ConnectTimeout=6 -i "$key" "$user@$host" "rm -f $remote" 2>/dev/null \
-        && say "Removed the Router Monitor collector from $host" || true
-}
-
-remove_games_shortcut() {
-    busctl --user call org.kde.kglobalaccel /kglobalaccel org.kde.KGlobalAccel unregister ss "$GAMES_DESKTOP_ID" _launch >/dev/null 2>&1 || true
-    rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/applications/$GAMES_DESKTOP_ID"
-    kbuildsycoca6 >/dev/null 2>&1 || true
+    router_login || return 0
+    ssh -o BatchMode=yes -o ConnectTimeout=6 -i "$ROUTER_KEY" "$ROUTER_USER@$ROUTER_HOST" "rm -f $ROUTER_SCRIPT" 2>/dev/null \
+        && say "Removed the Router Monitor collector from $ROUTER_HOST" || true
 }
 
 main() {
@@ -75,19 +63,22 @@ main() {
 
     say "Restoring the application launcher and removing the widgets"
     systemctl --user stop "$PLASMA_SERVICE" 2>/dev/null || true
+    trap start_plasma EXIT
     python3 "$WIDGETS_DIR/service/overlay-hosts" uninstall "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
     python3 "$WIDGETS_DIR/service/panel-launcher" uninstall "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc"
     rm -f "$LAUNCHER_SET_UP"
+    python3 "$WIDGETS_DIR/service/panel-taskbar" uninstall "$CONFIG_HOME/plasma-org.kde.plasma.desktop-appletsrc" "$CONFIG_HOME/konveyor/taskbarrc"
+    rm -f "$TASKBAR_SET_UP"
     "$WIDGETS_DIR/desktop-hider/desktop-containment" uninstall
     for item in "${PLASMOIDS[@]}"; do
         kpackagetool6 -t Plasma/Applet -r "$item" >/dev/null 2>&1 && say "  removed $item" || true
     done
-    systemctl --user reset-failed "$PLASMA_SERVICE" 2>/dev/null || true
-    systemctl --user start "$PLASMA_SERVICE" 2>/dev/null || true
+    trap - EXIT
+    start_plasma 2>/dev/null || true
 
     rm -rf "$WIDGETS_RUNTIME_DIR"
     systemctl --user unset-environment QML_XHR_ALLOW_FILE_READ
-    for item in "$(dirname "$WIDGETS_RUNTIME_DIR")" "$BIN_DIR" "${XDG_DATA_HOME:-$HOME/.local/share}/applications" "${XDG_DATA_HOME:-$HOME/.local/share}/plasma/plasmoids" "${XDG_DATA_HOME:-$HOME/.local/share}/plasma"; do
+    for item in "$(dirname "$WIDGETS_RUNTIME_DIR")" "$(dirname "$LAUNCHER_SET_UP")" "$BIN_DIR" "${XDG_DATA_HOME:-$HOME/.local/share}/applications" "${XDG_DATA_HOME:-$HOME/.local/share}/plasma/plasmoids" "${XDG_DATA_HOME:-$HOME/.local/share}/plasma"; do
         [[ -d $item ]] && rmdir --ignore-fail-on-non-empty "$item"
     done
     say "Widget configs in ~/.config (router and Steam credentials) were kept"

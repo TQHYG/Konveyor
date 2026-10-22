@@ -58,14 +58,17 @@ public:
     bool selectTile(std::size_t idx);
     void activateWindow(WindowId id);
     void insertTile(std::size_t idx, Tile tile);
+    std::optional<CarriedHeight> heightToCarry(std::size_t idx) const;
     void updateWindow(WindowId id);
 
     QSizeF reservedSize() const;
     PresetExtent presetWidthExtent(const Config::PresetSize &preset) const;
     PresetExtent presetHeightExtent(const Config::PresetSize &preset) const;
     double widthInPixels(ColumnWidth width) const;
+    std::optional<std::size_t> presetIndexOf(ColumnWidth width) const;
     void layoutTiles(bool animate);
     double width() const;
+    double tileAreaWidth() const;
 
     void focusTileAt(std::size_t index);
     bool focusUp();
@@ -102,6 +105,7 @@ public:
     std::vector<TileSizing> data;
     std::size_t activeTileIndex = 0;
     ColumnWidth widthSetting;
+    ColumnWidth defaultedWidth;
     std::optional<std::size_t> presetWidthIndex;
     bool fillsWidth = false;
     bool expandedAlone = false;
@@ -125,6 +129,7 @@ private:
     ColumnWidth computeNewWidth(SizeChange change, std::optional<std::size_t> tileIndex) const;
     double computeNewWindowHeight(SizeChange change, std::size_t tileIndex) const;
     void swapActive(std::size_t newIndex);
+    WindowHeight insertedHeight(const Tile &tile);
 
     std::optional<SlideAnimation> m_slideX;
     std::optional<SlideAnimation> m_slideY;

@@ -1,5 +1,9 @@
 #include "plugin/konveyoreffect_p.h"
 
+#include "config/log.h"
+
+#include <utility>
+
 namespace Konveyor
 {
 
@@ -23,18 +27,34 @@ void KonveyorEffect::handlePointerMotion(const QPointF &position, qint64 timesta
         d->dragOrigin = position.x();
         return;
     }
-    const std::optional<QString> output = readEngine().focusedOutput();
-    if (output && KWin::waylandServer()->seat()->isDrag()) {
-        changeEngine().dataDragEdgeScroll(*output, position, timestampMs);
-    }
     if (d->config.config().input.focusFollowsMouse) {
         focusWindowUnderPointer(position);
+    }
+}
+
+void KonveyorEffect::onActiveWindowChanged()
+{
+    if (d->followedWindow && d->followedWindow->isDeleted() && d->windows.idOf(d->followedWindow)) {
+        d->followAfterClose = true;
+        return;
+    }
+    followActiveWindow();
+}
+
+void KonveyorEffect::followActiveWindowAfterClose()
+{
+    if (std::exchange(d->followAfterClose, false) && !d->focusRequest) {
+        followActiveWindow();
     }
 }
 
 void KonveyorEffect::followActiveWindow()
 {
     KWin::Window *active = KWin::workspace()->activeWindow();
+    if (active != d->followedWindow) {
+        qCInfo(lcKonveyor) << "konveyor: KWin active window is" << (active ? active->resourceClass() : QStringLiteral("none"))
+                           << (active ? active->caption() : QString()) << "managed =" << d->windows.idOf(active).has_value();
+    }
     d->followedWindow = active;
     if (const std::optional<Layout::WindowId> id = d->windows.idOf(active)) {
         changeEngine().activateWindow(*id);
@@ -62,6 +82,18 @@ void KonveyorEffect::moveActiveOutputHome(Layout::WindowId id)
     }
 }
 
+void KonveyorEffect::keepOnHomeOutput(Layout::WindowId id)
+{
+    KWin::Window *window = d->windows.windowOf(id);
+    const auto home = d->homeOutputs.constFind(id);
+    if (!window || home == d->homeOutputs.constEnd() || window->isInteractiveMove() || window->isInteractiveResize()) {
+        return;
+    }
+    if (KWin::LogicalOutput *output = d->outputs.outputNamed(*home); output && window->output() != output) {
+        window->setOutput(output);
+    }
+}
+
 void KonveyorEffect::applyFocusRequest()
 {
     const std::optional<Layout::WindowId> id = std::exchange(d->focusRequest, std::nullopt);
@@ -70,6 +102,7 @@ void KonveyorEffect::applyFocusRequest()
         return;
     }
     if (window != KWin::workspace()->activeWindow()) {
+        qCInfo(lcKonveyor) << "konveyor: activating" << window->resourceClass() << "for layout focus on window" << *id;
         KWin::workspace()->activateWindow(window);
         if (!focusArrivesLater(window)) {
             followActiveWindow();
@@ -85,8 +118,21 @@ void KonveyorEffect::focusWindowUnderPointer(const QPointF &position)
     const std::optional<Layout::WindowId> id = readEngine().windowAt(position);
     KWin::Window *window = id ? d->windows.windowOf(*id) : nullptr;
     if (window && window != KWin::workspace()->activeWindow()) {
+        qCInfo(lcKonveyor) << "konveyor: focus follows mouse to" << window->resourceClass();
         KWin::workspace()->activateWindow(window);
     }
+}
+
+bool KonveyorEffect::switchToTabUnderPointer(const QPointF &position)
+{
+    const std::optional<Layout::WindowHit> hit = readEngine().hitAt(position);
+    KWin::Window *window = hit && hit->onTab ? d->windows.windowOf(hit->id) : nullptr;
+    if (!window) {
+        return false;
+    }
+    qCInfo(lcKonveyor) << "konveyor: switching to tab" << window->resourceClass();
+    KWin::workspace()->activateWindow(window);
+    return true;
 }
 
 void KonveyorEffect::warpPointerTo(Layout::WindowId id)
@@ -98,12 +144,15 @@ void KonveyorEffect::warpPointerTo(Layout::WindowId id)
     }
     const QPointF pointer = KWin::effects->cursorPos();
     const QRectF frame = state->targetFrame;
-    if (frame.contains(pointer) && input.warpMouseMode != Config::WarpMouseMode::CenterXYAlways) {
+    const double lastX = frame.right() - 1;
+    const double lastY = frame.bottom() - 1;
+    const bool inside = pointer.x() >= frame.left() && pointer.x() <= lastX && pointer.y() >= frame.top() && pointer.y() <= lastY;
+    if (inside && input.warpMouseMode != Config::WarpMouseMode::CenterXYAlways) {
         return;
     }
     const bool separate = input.warpMouseMode == Config::WarpMouseMode::Separate;
-    const double x = separate ? std::clamp(pointer.x(), frame.left(), frame.right()) : frame.center().x();
-    const double y = separate ? std::clamp(pointer.y(), frame.top(), frame.bottom()) : frame.center().y();
+    const double x = separate ? std::clamp(pointer.x(), frame.left(), lastX) : frame.center().x();
+    const double y = separate ? std::clamp(pointer.y(), frame.top(), lastY) : frame.center().y();
     KWin::input()->warpPointer({x, y});
 }
 

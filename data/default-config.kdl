@@ -9,6 +9,8 @@ input {
 }
 
 layout {
+    fixed-workspace-count 0
+    horizontal-desktops false
     gaps 16
     center-focused-column "never"
 
@@ -74,12 +76,13 @@ gestures {
         off
     }
 
-    // "scroll-view" scrolls the columns when dragging a tiled window's title bar, "move-window" drags it to a new position in the row.
-    titlebar-drag "scroll-view"
+    // "move-window" drags a tiled window by its title bar to a new position in the row, "scroll-view" scrolls the columns instead.
+    titlebar-drag "move-window"
 
-    // Uncomment to resize tiled windows by dragging their edges. Floating
-    // windows can always be resized.
-    // resize-tiled-windows
+    // Dragging a tiled window's edge resizes its column or row. Set it to false
+    // to change the layout only through shortcuts and presets. Floating windows
+    // can always be resized.
+    resize-tiled-windows true
 
     // Multi-finger touchpad gestures. 3-finger swipes move the row, 4-finger
     // swipes push the focused window into the next column or to another
@@ -167,7 +170,7 @@ window-rule {
     clip-to-geometry true
 }
 
-// Pin a window's column to the start or end of the row.
+// An empty default-column-width lets WezTerm open at the width it asks for.
 window-rule {
     match app-id=r#"^org\.wezfurlong\.wezterm$"#
     default-column-width {}
@@ -270,10 +273,12 @@ binds {
     Mod+Shift+U         { move-workspace-down; }
     Mod+Shift+I         { move-workspace-up; }
 
-    Mod+WheelScrollDown      cooldown-ms=150 { focus-workspace-down; }
-    Mod+WheelScrollUp        cooldown-ms=150 { focus-workspace-up; }
-    Mod+Ctrl+WheelScrollDown cooldown-ms=150 { move-column-to-workspace-down; }
-    Mod+Ctrl+WheelScrollUp   cooldown-ms=150 { move-column-to-workspace-up; }
+    // KWin's own wheel shortcuts come first: Mod+Ctrl with the vertical wheel
+    // zooms and Mod+Alt with it switches desktops, so those stay unbound here.
+    Mod+WheelScrollDown           cooldown-ms=150 { focus-workspace-down; }
+    Mod+WheelScrollUp             cooldown-ms=150 { focus-workspace-up; }
+    Mod+Ctrl+Alt+WheelScrollDown  cooldown-ms=150 { move-column-to-workspace-down; }
+    Mod+Ctrl+Alt+WheelScrollUp    cooldown-ms=150 { move-column-to-workspace-up; }
 
     Mod+WheelScrollRight      { focus-column-right; }
     Mod+WheelScrollLeft       { focus-column-left; }
@@ -303,6 +308,16 @@ binds {
     Mod+Ctrl+7 { move-column-to-workspace 7; }
     Mod+Ctrl+8 { move-column-to-workspace 8; }
     Mod+Ctrl+9 { move-column-to-workspace 9; }
+    Super+Alt+1 { focus-taskbar-item 1; }
+    Super+Alt+2 { focus-taskbar-item 2; }
+    Super+Alt+3 { focus-taskbar-item 3; }
+    Super+Alt+4 { focus-taskbar-item 4; }
+    Super+Alt+5 { focus-taskbar-item 5; }
+    Super+Alt+6 { focus-taskbar-item 6; }
+    Super+Alt+7 { focus-taskbar-item 7; }
+    Super+Alt+8 { focus-taskbar-item 8; }
+    Super+Alt+9 { focus-taskbar-item 9; }
+    Super+Alt+0 { focus-taskbar-item 10; }
 
     Mod+BracketLeft  { consume-or-expel-window-left; }
     Mod+BracketRight { consume-or-expel-window-right; }
@@ -313,7 +328,7 @@ binds {
     Mod+Shift+R { switch-preset-column-width-back; }
     Mod+Ctrl+Shift+R { switch-preset-window-height; }
     Mod+Ctrl+R { reset-window-height; }
-    Mod+F { cycle-window-expansion; }
+    Mod+F { fullscreen-window; }
     Mod+Shift+F { fullscreen-window; }
     Mod+Ctrl+F { expand-column-to-available-width; }
 

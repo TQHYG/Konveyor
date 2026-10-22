@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config/loader.h"
 #include "document/configdocument.h"
 #include "store/edithistory.h"
 #include "system/livesession.h"
@@ -53,6 +54,7 @@ public:
     Q_INVOKABLE bool isDefault(const QString &path) const;
     Q_INVOKABLE bool resetToDefault(const QString &path);
     Q_INVOKABLE QVariantMap node(const QString &path) const;
+    Q_INVOKABLE QVariantMap defaultNode(const QString &path) const;
     Q_INVOKABLE QVariantList children(const QString &parentPath, const QString &name) const;
     Q_INVOKABLE QVariantMap scope(const QString &layoutPath) const;
     Q_INVOKABLE bool setNode(const QString &path, const QVariantMap &node);
@@ -76,9 +78,12 @@ Q_SIGNALS:
 private:
     bool apply(const EditResult &result, const QString &before);
     void replaceText(const QString &text);
+    std::optional<QString> readSaved();
     void refresh();
     void watch();
     void fileChanged();
+    void adoptDisk(const QString &disk);
+    void warnIfOverridden(const QString &name, const QStringList &paths);
 
     ConfigDocument m_document;
     ConfigDocument m_defaults;
@@ -88,6 +93,8 @@ private:
     QString m_savedText;
     QString m_defaultText;
     QString m_configError;
+    QString m_readError;
+    Config::Config m_config = Config::defaultConfig();
     QVariantMap m_values;
     LiveSession *m_live = nullptr;
     int m_revision = 0;

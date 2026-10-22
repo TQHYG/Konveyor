@@ -148,22 +148,22 @@ void Workspace::centerVisibleColumns()
 
 bool Workspace::moveLeft()
 {
-    return isFloatingFocused() || m_strip.moveLeft();
+    return !isFloatingFocused() && m_strip.moveLeft();
 }
 
 bool Workspace::moveRight()
 {
-    return isFloatingFocused() || m_strip.moveRight();
+    return !isFloatingFocused() && m_strip.moveRight();
 }
 
 bool Workspace::moveDown()
 {
-    return isFloatingFocused() || m_strip.moveDown();
+    return !isFloatingFocused() && m_strip.moveDown();
 }
 
 bool Workspace::moveUp()
 {
-    return isFloatingFocused() || m_strip.moveUp();
+    return !isFloatingFocused() && m_strip.moveUp();
 }
 
 void Workspace::moveColumnToFirst()
@@ -180,10 +180,10 @@ void Workspace::moveColumnToLast()
     }
 }
 
-void Workspace::moveColumnToIndex(std::size_t index)
+void Workspace::moveColumnToIndex(std::size_t index, std::optional<WindowId> window)
 {
-    if (!isFloatingFocused()) {
-        m_strip.moveColumnToIndex(index);
+    if (!targetIsFloating(window)) {
+        m_strip.moveColumnToIndex(index, window);
     }
 }
 
@@ -222,18 +222,27 @@ void Workspace::swapWindowInDirection(ScrollDirection direction)
     }
 }
 
-void Workspace::toggleColumnTabbedDisplay()
+void Workspace::toggleColumnTabbedDisplay(std::optional<WindowId> window)
 {
-    if (!isFloatingFocused()) {
-        m_strip.toggleColumnTabbedDisplay();
+    if (!targetIsFloating(window)) {
+        m_strip.toggleColumnTabbedDisplay(window);
     }
 }
 
-void Workspace::setColumnDisplay(Config::ColumnDisplay display)
+void Workspace::setColumnDisplay(Config::ColumnDisplay display, std::optional<WindowId> window)
 {
-    if (!isFloatingFocused()) {
-        m_strip.setColumnDisplay(display);
+    if (!targetIsFloating(window)) {
+        m_strip.setColumnDisplay(display, window);
     }
+}
+
+std::optional<std::size_t> Workspace::tiledColumnIndex(WindowId window) const
+{
+    const Column *column = isFloating(window) ? nullptr : m_strip.columnFor(window);
+    if (!column) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(column - m_strip.columns().data());
 }
 
 }

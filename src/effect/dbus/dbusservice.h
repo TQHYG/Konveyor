@@ -4,6 +4,9 @@
 #include <QObject>
 
 #include <functional>
+#include <memory>
+
+class QDBusServiceWatcher;
 
 namespace Konveyor
 {
@@ -21,6 +24,8 @@ struct DBusHandlers
     std::function<bool()> overviewOpen;
     std::function<QJsonDocument()> lastBind;
     std::function<QJsonDocument()> gestures;
+    std::function<QJsonDocument(const QString &)> appRules;
+    std::function<QString(const QString &)> setAppRule;
 };
 
 class DBusService : public QObject
@@ -48,19 +53,32 @@ public Q_SLOTS:
     Q_SCRIPTABLE QString LastBind() const;
     Q_SCRIPTABLE QString Gestures() const;
     Q_SCRIPTABLE bool MultiTouchActive() const;
+    Q_SCRIPTABLE QString ModifiersHeld() const;
+    Q_SCRIPTABLE QString AppRules(const QString &json) const;
+    Q_SCRIPTABLE QString SetAppRule(const QString &json);
 
     void setMultiTouchActive(bool active);
+    void setModifiersHeld(bool super, bool alt);
+    void announceLayoutChange();
+    void requestTaskbarItem(int number);
 
 Q_SIGNALS:
     Q_SCRIPTABLE void MultiTouchChanged(bool active);
+    Q_SCRIPTABLE void LayoutChanged();
+    Q_SCRIPTABLE void TaskbarItemRequested(int number);
+    Q_SCRIPTABLE void ModifiersHeldChanged(bool super, bool alt);
 
 private:
     static QString compact(const QJsonDocument &document);
+    bool tryRegister();
 
     bool m_multiTouchActive = false;
+    bool m_superHeld = false;
+    bool m_altHeld = false;
 
     DBusHandlers m_handlers;
     bool m_registered = false;
+    std::unique_ptr<QDBusServiceWatcher> m_waitForName;
 };
 
 }

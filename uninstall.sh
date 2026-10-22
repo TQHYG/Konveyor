@@ -31,7 +31,7 @@ parse_arguments() {
     done
 }
 
-restore_plasma_panels() {
+restore_plasma_shell() {
     gdbus call --session --dest org.kde.plasmashell --object-path /PlasmaShell --method org.kde.PlasmaShell.evaluateScript '
 for (const panel of panels()) {
     panel.currentConfigGroup = ["Konveyor"];
@@ -39,11 +39,16 @@ for (const panel of panels()) {
     if (saved === "") { continue; }
     if (panel.lengthMode === "fill") { panel.lengthMode = saved; }
     panel.writeConfig("savedLengthMode", "");
-}' >/dev/null 2>&1 || true
+}
+for (const desktop of desktops()) {
+    desktop.currentConfigGroup = ["General"];
+    desktop.writeConfig("hideDesktopWidgets", false);
+}' >/dev/null 2>&1 \
+        || say "Plasma is not running, so panels Konveyor filled and desktop widgets it hid stay that way until Konveyor runs again"
 }
 
 disable_in_kwin() {
-    restore_plasma_panels
+    restore_plasma_shell
 
     say "Disabling Konveyor in KWin"
     local plugin
@@ -62,9 +67,16 @@ disable_in_kwin() {
     fi
     remove_misplaced_plugins
     kwin_dbus /KWin org.kde.KWin.reconfigure
+}
 
+restore_shortcuts() {
+    local program="$KONVEYOR_PREFIX/bin/konveyor"
+    if [[ ! -x $program ]]; then
+        say "$program is missing, so it could not restore the KDE shortcuts Konveyor had taken over; set them again in System Settings > Shortcuts"
+        return 0
+    fi
     say "Restoring the KDE shortcuts Konveyor had taken over"
-    "$KONVEYOR_PREFIX/bin/konveyor" restore-shortcuts
+    "$program" restore-shortcuts
 }
 
 remove_files() {
@@ -74,7 +86,7 @@ remove_files() {
         return
     fi
     say "Removing installed files"
-    while IFS= read -r file; do
+    while IFS= read -r file || [[ -n $file ]]; do
         [[ -n $file ]] && run_prefix rm -f "$file"
     done <"$manifest"
     remove_empty_directories "$manifest"
@@ -121,15 +133,18 @@ remove_session_path() {
     fi
 }
 
-remove_atomic_setup() {
+remove_session_paths() {
     rm -f "$KONVEYOR_SESSION_ENV"
+    [[ $KONVEYOR_PREFIX != /usr && -n $KONVEYOR_PLUGIN_DIR ]] || return 0
+    local qml
+    remove_session_path QT_PLUGIN_PATH "${KONVEYOR_PLUGIN_DIR%/kwin/effects/plugins}"
+    qml=$(manifest_entry "$KONVEYOR_STATE_DIR/install_manifest.txt" '/org/kde/konveyor/settings/qmldir$')
+    remove_session_path QML_IMPORT_PATH "${qml%/org/kde/konveyor/settings/qmldir}"
+}
+
+remove_atomic_setup() {
     $KONVEYOR_ATOMIC || return 0
-    local name qml
-    if [[ -n $KONVEYOR_PLUGIN_DIR ]]; then
-        remove_session_path QT_PLUGIN_PATH "${KONVEYOR_PLUGIN_DIR%/kwin/effects/plugins}"
-        qml=$(manifest_entry "$KONVEYOR_STATE_DIR/install_manifest.txt" '/org/kde/konveyor/settings/qmldir$')
-        remove_session_path QML_IMPORT_PATH "${qml%/org/kde/konveyor/settings/qmldir}"
-    fi
+    local name
     for name in $(podman ps --all --format '{{.Names}}' | grep -E '^konveyor-(fedora-[0-9]+|steamos)$' || true); do
         say "Removing the $name build container"
         podman rm --force --volumes "$name" >/dev/null
@@ -143,9 +158,16 @@ remove_update_unit() {
 }
 
 remove_state() {
-    rm -rf "${XDG_STATE_HOME:-$HOME/.local/state}/konveyor" "${XDG_STATE_HOME:-$HOME/.local/state}/konveyorstaterc"
-    local directory
-    for directory in "$(dirname "$KONVEYOR_SESSION_ENV")" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd" "$HOME/.local/bin"; do
+    local state="${XDG_STATE_HOME:-$HOME/.local/state}" directory directories
+    rm -f "$state/konveyorstaterc"
+    if $WIDGETS; then
+        rm -rf "$state/konveyor"
+    else
+        rm -f "$state/konveyor/install-options" "$state/konveyor/update-pending" "$state/konveyor/window-memory.json" "$KONVEYOR_DISABLED_SCRIPTS"
+    fi
+    directories=("$state/konveyor" "$(dirname "$KONVEYOR_SESSION_ENV")" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user" "${XDG_CONFIG_HOME:-$HOME/.config}/systemd" "$HOME/.local/bin")
+    $KONVEYOR_ATOMIC && directories+=("$(dirname "$KONVEYOR_USER_UPDATER_DIR")")
+    for directory in "${directories[@]}"; do
         [[ -d $directory ]] && rmdir --ignore-fail-on-non-empty "$directory"
     done
     return 0
@@ -167,6 +189,8 @@ main() {
         [[ -x $widget_uninstaller ]] || widget_uninstaller="$SOURCE_DIR/widgets/uninstall.sh"
         "$widget_uninstaller"
     fi
+    restore_shortcuts
+    remove_session_paths
     remove_atomic_setup
     remove_files
     remove_update_unit
@@ -175,4 +199,4 @@ main() {
     say "Konveyor is uninstalled. Log out and back in to fully unload it from KWin."
 }
 
-main "$@"
+[[ ${BASH_SOURCE[0]} != "$0" ]] || main "$@"

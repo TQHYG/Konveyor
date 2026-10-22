@@ -6,6 +6,11 @@ namespace Konveyor
 namespace
 {
 
+bool isFullscreenLike(const Layout::WindowState &state)
+{
+    return state.requestedSizingMode == Layout::WindowMode::Fullscreen || state.isWindowedFullscreen;
+}
+
 quint8 resizeEdgesFor(KWin::Gravity gravity)
 {
     const auto edges = [](std::initializer_list<Layout::ResizeEdge> list) {
@@ -66,10 +71,14 @@ void KonveyorEffect::onInteractive(Layout::WindowId id, bool isMove, int phase)
     if (!window) {
         return;
     }
-    if (isFloatingWindow(id)) {
-        if (phase == interactivePhaseEnd) {
-            changeEngine().setFloatingFrame(id, window->moveResizeGeometry());
-        }
+    if (!trackTouchMoveResize(window, phase)) {
+        return;
+    }
+    if (isMove) {
+        trackMove(id, phase);
+    }
+    if (isFloatingWindow(id) && readEngine().movingWindow() != id) {
+        followFloatingWindow(id, window, isMove, phase);
         return;
     }
     const bool scrollOnDrag = d->config.config().gestures.titlebarDrag == Config::TitlebarDrag::ScrollView;
@@ -89,6 +98,62 @@ void KonveyorEffect::onInteractive(Layout::WindowId id, bool isMove, int phase)
     }
 }
 
+void KonveyorEffect::followFloatingWindow(Layout::WindowId id, KWin::Window *window, bool isMove, int phase)
+{
+    if (phase == interactivePhaseEnd || (isMove && phase == interactivePhaseStep)) {
+        changeEngine().setFloatingFrame(id, window->moveResizeGeometry());
+    }
+    if (isMove && phase == interactivePhaseStart) {
+        changeEngine().beginWindowDrag(id, interactionPoint());
+    } else if (isMove && phase == interactivePhaseEnd) {
+        changeEngine().endWindowDrag();
+    }
+}
+
+void KonveyorEffect::trackMove(Layout::WindowId id, int phase)
+{
+    if (phase == interactivePhaseStart) {
+        d->cancelledMove.reset();
+        const std::optional<Layout::WindowState> state = readEngine().windowState(id);
+        d->windowedMove = state && !isFullscreenLike(*state) ? std::optional(id) : std::nullopt;
+        holdQuickTiling(id);
+    } else if (phase == interactivePhaseEnd) {
+        if (d->windowedMove == id) {
+            d->windowedMove.reset();
+        }
+        releaseQuickTiling();
+    }
+}
+
+void KonveyorEffect::holdQuickTiling(Layout::WindowId id)
+{
+    if (!d->quickTiling) {
+        d->quickTiling = {id, KWin::options->electricBorderTiling(), KWin::options->electricBorderMaximize()};
+        KWin::options->setElectricBorderTiling(false);
+        KWin::options->setElectricBorderMaximize(false);
+    }
+}
+
+void KonveyorEffect::releaseQuickTiling()
+{
+    if (const auto held = std::exchange(d->quickTiling, std::nullopt)) {
+        KWin::options->setElectricBorderTiling(held->tiling);
+        KWin::options->setElectricBorderMaximize(held->maximize);
+    }
+}
+
+void KonveyorEffect::endMoveIntoFullscreen(const QList<Layout::WindowState> &states)
+{
+    const auto state = std::ranges::find_if(states, [this](const Layout::WindowState &each) { return each.id == d->windowedMove; });
+    if (state == states.end() || !isFullscreenLike(*state)) {
+        return;
+    }
+    d->windowedMove.reset();
+    if (KWin::Window *window = d->windows.windowOf(state->id); window && window->isInteractiveMove()) {
+        window->endInteractiveMoveResize();
+    }
+}
+
 void KonveyorEffect::handleTitlebarDrag(Layout::WindowId id, KWin::Window *window, int phase)
 {
     if (phase != interactivePhaseStart) {
@@ -102,6 +167,27 @@ void KonveyorEffect::handleTitlebarDrag(Layout::WindowId id, KWin::Window *windo
     d->dragOrigin = interactionPoint().x();
     changeEngine().beginSwipe(*output, false);
     window->endInteractiveMoveResize();
+}
+
+bool KonveyorEffect::trackTouchMoveResize(KWin::Window *window, int phase)
+{
+    if (phase == interactivePhaseStart && d->gestures.touchPointCount() > 0) {
+        d->touchMoveResize = window;
+        if (d->gestures.touchPointCount() > 1) {
+            cancelTouchMoveResize();
+            return false;
+        }
+    } else if (phase == interactivePhaseEnd && d->touchMoveResize == window) {
+        d->touchMoveResize.clear();
+    }
+    return true;
+}
+
+void KonveyorEffect::cancelTouchMoveResize()
+{
+    if (KWin::Window *window = std::exchange(d->touchMoveResize, nullptr); window && KWin::workspace()->moveResizeWindow() == window) {
+        window->cancelInteractiveMoveResize();
+    }
 }
 
 void KonveyorEffect::endTitlebarDrag()
@@ -118,9 +204,22 @@ void KonveyorEffect::handleWindowMove(Layout::WindowId id, KWin::Window *window,
         changeEngine().beginWindowDrag(id, pointer);
     } else if (phase == interactivePhaseStep) {
         changeEngine().updateWindowDrag(pointer, outputNameOf(window));
+    } else if (std::exchange(d->cancelledMove, std::nullopt) == id) {
+        changeEngine().cancelWindowDrag();
     } else {
         changeEngine().endWindowDrag();
     }
+}
+
+void KonveyorEffect::markMoveCancelled()
+{
+    KWin::Window *window = KWin::workspace()->moveResizeWindow();
+    d->cancelledMove = window && window->isInteractiveMove() ? d->windows.idOf(window) : std::nullopt;
+}
+
+bool KonveyorEffect::toggleDragFloating()
+{
+    return changeEngine().toggleWindowDragFloating();
 }
 
 void KonveyorEffect::handleWindowResize(Layout::WindowId id, KWin::Window *window, int phase)
@@ -132,11 +231,10 @@ void KonveyorEffect::handleWindowResize(Layout::WindowId id, KWin::Window *windo
         return;
     }
     if (phase == interactivePhaseStart) {
-        d->resizeOrigin = window->moveResizeGeometry().size();
+        d->resizeOrigin = interactionPoint();
         changeEngine().beginResize(id, resizeEdgesFor(window->interactiveMoveResizeGravity()));
     } else if (phase == interactivePhaseStep) {
-        const QSizeF size = window->moveResizeGeometry().size();
-        changeEngine().updateResize(QPointF(size.width() - d->resizeOrigin.width(), size.height() - d->resizeOrigin.height()));
+        changeEngine().updateResize(interactionPoint() - d->resizeOrigin);
     } else {
         changeEngine().endResize();
     }

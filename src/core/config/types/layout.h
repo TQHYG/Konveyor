@@ -18,6 +18,8 @@ struct Layout
     bool alwaysCenterSingleColumn = false;
     bool alwaysExpandSingleColumn = true;
     bool emptyWorkspaceAboveFirst = false;
+    int fixedWorkspaceCount = 0;
+    bool horizontalDesktops = false;
     ColumnDisplay defaultColumnDisplay = ColumnDisplay::Normal;
     QList<PresetSize> presetColumnWidths;
     std::optional<PresetSize> defaultColumnWidth = Proportion {0.5};
@@ -45,6 +47,8 @@ struct LayoutPart
     std::optional<bool> alwaysCenterSingleColumn;
     std::optional<bool> alwaysExpandSingleColumn;
     std::optional<bool> emptyWorkspaceAboveFirst;
+    std::optional<int> fixedWorkspaceCount;
+    std::optional<bool> horizontalDesktops;
     std::optional<ColumnDisplay> defaultColumnDisplay;
     std::optional<QList<PresetSize>> presetColumnWidths;
     std::optional<std::optional<PresetSize>> defaultColumnWidth;

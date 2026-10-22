@@ -2,6 +2,50 @@
 
 using namespace LayoutTest;
 
+namespace
+{
+
+enum class Request
+{
+    Client,
+    Action,
+    WindowedAction,
+};
+
+void requestFullscreen(Fixture &fixture, Layout::WindowId id, Request request)
+{
+    if (request == Request::Client) {
+        fixture.engine().setWindowFullscreen(id, true);
+        return;
+    }
+    const QString name = request == Request::Action ? QStringLiteral("fullscreen-window") : QStringLiteral("toggle-windowed-fullscreen");
+    QVERIFY(fixture.engine().perform({name, {}, {}}, id).ok);
+}
+
+void leaveFullscreen(Fixture &fixture, Layout::WindowId id, Request request)
+{
+    if (request == Request::Client) {
+        fixture.engine().setWindowFullscreen(id, false);
+        return;
+    }
+    requestFullscreen(fixture, id, request);
+}
+
+void addRequestRows()
+{
+    QTest::addColumn<Request>("request");
+    QTest::newRow("client") << Request::Client;
+    QTest::newRow("action") << Request::Action;
+    QTest::newRow("windowed action") << Request::WindowedAction;
+}
+
+bool isFullscreenLike(const Layout::WindowState &state)
+{
+    return state.requestedSizingMode == Layout::WindowMode::Fullscreen || state.isWindowedFullscreen;
+}
+
+}
+
 class TestLayoutWindowDrag : public QObject
 {
     Q_OBJECT
@@ -36,6 +80,168 @@ private Q_SLOTS:
         QCOMPARE(fixture.state(id).workspace, workspace);
         QCOMPARE(fixture.state(id).columnIndex, column);
         QVERIFY(fixture.state(id).onActiveWorkspace);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void aDroppedWindowHasFocusOnTheMonitorItLandsOn_data()
+    {
+        QTest::addColumn<QPointF>("pointer");
+        QTest::addColumn<QString>("output");
+        QTest::addColumn<QString>("midDrag");
+        QTest::newRow("pointer crossed before the window came loose") << QPointF(2200, 540) << QStringLiteral("DP-2") << QString();
+        QTest::newRow("keyboard focus moved away mid-drag")
+            << QPointF(1400, 540) << QStringLiteral("DP-1") << QStringLiteral("focus-monitor-right");
+    }
+
+    void aDroppedWindowHasFocusOnTheMonitorItLandsOn()
+    {
+        QFETCH(QPointF, pointer);
+        QFETCH(QString, output);
+        QFETCH(QString, midDrag);
+        Fixture fixture;
+        fixture.addOutput(QStringLiteral("DP-2"), QRectF(1920, 0, 1920, 1080));
+        fixture.engine().focusOutput(QStringLiteral("DP-2"));
+        const auto there = fixture.add(QStringLiteral("there"));
+        fixture.engine().focusOutput(QStringLiteral("DP-1"));
+        const auto here = fixture.add(QStringLiteral("a"));
+        const auto moved = fixture.add(QStringLiteral("b"));
+        QVERIFY(fixture.engine().beginWindowDrag(moved, QPointF(1800, 540)));
+        fixture.engine().updateWindowDrag(QPointF(1900, 540), QStringLiteral("DP-1"));
+        fixture.engine().updateWindowDrag(pointer, output);
+        if (!midDrag.isEmpty()) {
+            QVERIFY(fixture.perform(midDrag).ok);
+        }
+        fixture.engine().updateWindowDrag(pointer + QPointF(100, 0), output);
+        fixture.engine().endWindowDrag();
+        fixture.settle();
+        QCOMPARE(fixture.state(moved).output, output);
+        QCOMPARE(fixture.focused(), std::optional(moved));
+        QCOMPARE(fixture.engine().focusedOutput(), std::optional(output));
+        QVERIFY(!fixture.state(there).isFocused);
+        QVERIFY(!fixture.state(here).isFocused);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void fullscreenMidDragDropsTheWindowWhereTheHintIs_data() { addRequestRows(); }
+
+    void fullscreenMidDragDropsTheWindowWhereTheHintIs()
+    {
+        QFETCH(Request, request);
+        Fixture fixture;
+        fixture.add(QStringLiteral("a"));
+        fixture.add(QStringLiteral("b"));
+        const auto c = fixture.add(QStringLiteral("c"));
+        QVERIFY(startMove(fixture, c, QPointF(2, 540)));
+        QCOMPARE(fixture.engine().movingWindow(), std::optional(c));
+        requestFullscreen(fixture, c, request);
+        fixture.settle();
+        QCOMPARE(fixture.engine().movingWindow(), std::nullopt);
+        QVERIFY(!fixture.engine().outputStates().constFirst().dropHint);
+        QVERIFY(isFullscreenLike(fixture.state(c)));
+        QCOMPARE(fixture.state(c).columnIndex, 0);
+        QCOMPARE(fixture.focused(), std::optional(c));
+        fixture.engine().updateWindowDrag(QPointF(1900, 540), QStringLiteral("DP-1"));
+        fixture.engine().endWindowDrag();
+        fixture.settle();
+        QVERIFY(isFullscreenLike(fixture.state(c)));
+        QCOMPARE(fixture.state(c).columnIndex, 0);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void fullscreenBeforeTheWindowDetachesStaysFullscreen_data() { addRequestRows(); }
+
+    void fullscreenBeforeTheWindowDetachesStaysFullscreen()
+    {
+        QFETCH(Request, request);
+        Fixture fixture;
+        fixture.add(QStringLiteral("a"));
+        const auto b = fixture.add(QStringLiteral("b"));
+        const QPointF start = fixture.frame(b).center();
+        QVERIFY(fixture.engine().beginWindowDrag(b, start));
+        fixture.engine().updateWindowDrag(start + QPointF(20, 0), QStringLiteral("DP-1"));
+        requestFullscreen(fixture, b, request);
+        fixture.engine().updateWindowDrag(start + QPointF(-900, 0), QStringLiteral("DP-1"));
+        fixture.settle();
+        QCOMPARE(fixture.engine().movingWindow(), std::nullopt);
+        QVERIFY(isFullscreenLike(fixture.state(b)));
+        QCOMPARE(fixture.state(b).columnIndex, 1);
+        fixture.engine().endWindowDrag();
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void leavingFullscreenAfterAFullscreenDropKeepsTheDropPlace_data() { addRequestRows(); }
+
+    void leavingFullscreenAfterAFullscreenDropKeepsTheDropPlace()
+    {
+        QFETCH(Request, request);
+        Fixture fixture;
+        fixture.add(QStringLiteral("a"));
+        fixture.add(QStringLiteral("b"));
+        const auto c = fixture.add(QStringLiteral("c"));
+        const QSizeF size = fixture.frame(c).size();
+        QVERIFY(startMove(fixture, c, QPointF(2, 540)));
+        requestFullscreen(fixture, c, request);
+        fixture.settle();
+        leaveFullscreen(fixture, c, request);
+        fixture.settle();
+        QVERIFY(!isFullscreenLike(fixture.state(c)));
+        QCOMPARE(fixture.state(c).columnIndex, 0);
+        QCOMPARE(fixture.frame(c), QRectF(QPointF(16, 16), size));
+        QCOMPARE(fixture.focused(), std::optional(c));
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void fullscreenForAFloatingWindowMidDragDropsItFloating_data() { addRequestRows(); }
+
+    void fullscreenForAFloatingWindowMidDragDropsItFloating()
+    {
+        QFETCH(Request, request);
+        Fixture fixture;
+        fixture.add(QStringLiteral("a"));
+        const auto b = fixture.add(QStringLiteral("b"));
+        QVERIFY(fixture.perform(QStringLiteral("toggle-window-floating")).ok);
+        fixture.advance(1000);
+        const QPointF start = fixture.frame(b).center();
+        QVERIFY(fixture.engine().beginWindowDrag(b, start));
+        fixture.engine().updateWindowDrag(start + QPointF(-200, 100), QStringLiteral("DP-1"));
+        requestFullscreen(fixture, b, request);
+        fixture.settle();
+        QCOMPARE(fixture.engine().movingWindow(), std::nullopt);
+        QVERIFY(isFullscreenLike(fixture.state(b)));
+        leaveFullscreen(fixture, b, request);
+        fixture.advance(1000);
+        QVERIFY(fixture.state(b).isFloating);
+        QCOMPARE(fixture.frame(b).center(), start + QPointF(-200, 100));
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void anActionWithoutATargetActsOnTheDraggedWindow()
+    {
+        Fixture fixture;
+        fixture.add(QStringLiteral("a"));
+        const auto b = fixture.add(QStringLiteral("b"));
+        const auto c = fixture.add(QStringLiteral("c"));
+        QVERIFY(startMove(fixture, c, QPointF(2, 540)));
+        QVERIFY(fixture.perform(QStringLiteral("fullscreen-window")).ok);
+        QCOMPARE(fixture.engine().movingWindow(), std::nullopt);
+        QCOMPARE(fixture.state(c).requestedSizingMode, Layout::WindowMode::Fullscreen);
+        QCOMPARE(fixture.state(b).requestedSizingMode, Layout::WindowMode::Normal);
+        QCOMPARE(fixture.state(c).columnIndex, 0);
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void fullscreenForAnotherWindowKeepsTheDrag()
+    {
+        Fixture fixture;
+        const auto a = fixture.add(QStringLiteral("a"));
+        fixture.add(QStringLiteral("b"));
+        const auto c = fixture.add(QStringLiteral("c"));
+        QVERIFY(startMove(fixture, c, QPointF(2, 540)));
+        fixture.engine().setWindowFullscreen(a, true);
+        QCOMPARE(fixture.engine().movingWindow(), std::optional(c));
+        fixture.engine().endWindowDrag();
+        fixture.settle();
+        QCOMPARE(fixture.state(c).requestedSizingMode, Layout::WindowMode::Normal);
         VERIFY_INVARIANTS(fixture);
     }
 };

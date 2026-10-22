@@ -1,6 +1,7 @@
 #pragma once
 
 #include "config/types.h"
+#include "document/apprules.h"
 #include "layout/engine/engine.h"
 
 #include <effect/effect.h>
@@ -9,6 +10,7 @@
 
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace KWin
 {
@@ -29,6 +31,10 @@ class ShortcutManager;
 class WindowApplier;
 class WindowRegistry;
 
+using PaintWindowResult = decltype(std::declval<KWin::Effect &>().paintWindow(std::declval<const KWin::RenderTarget &>(),
+    std::declval<const KWin::RenderViewport &>(), std::declval<KWin::EffectWindow *>(), 0, std::declval<const KWin::Region &>(),
+    std::declval<KWin::WindowPaintData &>()));
+
 class KonveyorEffect : public KWin::Effect
 {
     Q_OBJECT
@@ -42,12 +48,13 @@ public:
     void prePaintScreen(KWin::ScreenPrePaintData &data) override;
     void postPaintScreen() override;
     void prePaintWindow(KWin::RenderView *view, KWin::EffectWindow *w, KWin::WindowPrePaintData &data) override;
-    void paintWindow(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *w, int mask,
-        const KWin::Region &deviceRegion, KWin::WindowPaintData &data) override;
+    PaintWindowResult paintWindow(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport, KWin::EffectWindow *w,
+        int mask, const KWin::Region &deviceRegion, KWin::WindowPaintData &data) override;
     bool blocksDirectScanout() const override;
 
 private:
     void installInputFilter();
+    void installGestureFilters();
     void startDBusService();
     void connectRegistries();
     void connectWindowLifecycle();
@@ -62,7 +69,10 @@ private:
     QJsonDocument focusedOutputJson() const;
     QJsonDocument bindsJson() const;
     QJsonDocument lastBindJson() const;
-    void applyHotCorners(const Config::HotCorners &corners);
+    std::optional<Settings::AppPlace> appPlace(Layout::WindowId id) const;
+    QJsonDocument appRulesJson(const QString &json) const;
+    QString setAppRuleJson(const QString &json);
+    void applyHotCorners(const Config::Config &config);
     void handlePointerMotion(const QPointF &position, qint64 timestampMs);
     QPointF interactionPoint() const;
     bool routeGesture(bool consumed);
@@ -74,31 +84,53 @@ private:
     void showKdeOverview(bool open);
     void connectOverviewSync();
     void followActiveWindow();
+    void followActiveWindowAfterClose();
+    void onActiveWindowChanged();
     void followActiveOutput(const QString &name);
     void moveActiveOutputHome(Layout::WindowId id);
+    void keepOnHomeOutput(Layout::WindowId id);
     void applyFocusRequest();
     void focusWindowUnderPointer(const QPointF &position);
+    bool switchToTabUnderPointer(const QPointF &position);
     void warpPointerTo(Layout::WindowId id);
     bool isFloatingWindow(Layout::WindowId id) const;
     bool adoptFloatingGeometry(Layout::WindowId id, KWin::Window *window);
     void handleTitlebarDrag(Layout::WindowId id, KWin::Window *window, int phase);
     void endTitlebarDrag();
+    void cancelTouchMoveResize();
+    bool trackTouchMoveResize(KWin::Window *window, int phase);
+    void handleTouchCancel();
     void handleWindowMove(Layout::WindowId id, KWin::Window *window, int phase);
+    void followFloatingWindow(Layout::WindowId id, KWin::Window *window, bool isMove, int phase);
+    void markMoveCancelled();
+    bool toggleDragFloating();
     void handleWindowResize(Layout::WindowId id, KWin::Window *window, int phase);
     void connectDesktopSync();
     void applyConfig(const Config::Config &config);
     void onWindowAdded(Layout::WindowId id, KWin::Window *window);
+    void rememberHiddenPlacement(KWin::Window *window, const Layout::RestorePlacement &placement);
+    void takeHandedOverHiddenPlacements();
+    void adoptOntoKdeDesktop(Layout::WindowId id, KWin::Window *window);
+    void showOnAllDesktopsByRule(Layout::WindowId id, KWin::Window *window);
+    bool placedBefore(KWin::Window *first, KWin::Window *second) const;
     void observeMonitorOverlay(KWin::Window *window);
     void forgetMonitorOverlay(KWin::Window *window);
     void placeMonitorOverlays(Layout::WindowId id);
     void placeMonitorPanels(Layout::WindowId id);
     void onInteractive(Layout::WindowId id, bool isMove, int phase);
+    void trackMove(Layout::WindowId id, int phase);
+    void holdQuickTiling(Layout::WindowId id);
+    void releaseQuickTiling();
+    void endMoveIntoFullscreen(const QList<Layout::WindowState> &states);
     void flush();
     void stepAnimations();
     Layout::Engine &changeEngine();
     const Layout::Engine &readEngine() const;
     void acknowledgeSettledModeChanges(const QList<Layout::WindowState> &states);
     void updateDecorations(const QList<Layout::WindowState> &states);
+    void updateDropHint(const QList<Layout::WindowState> &states);
+    void updateDraggedOpacity(const QList<Layout::WindowState> &states);
+    bool isDragged(KWin::Window *window) const;
     void updateHomeOutputs(const QList<Layout::WindowState> &states);
     std::optional<QRectF> spillHome(KWin::Window *window) const;
     bool hasSpill() const;

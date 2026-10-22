@@ -1,27 +1,13 @@
 #include "document/configdocument.h"
 
+#include "config/forceresizable.h"
 #include "document/nodecodec.h"
 #include "kdl/characters.h"
 
+#include <algorithm>
+
 namespace Konveyor::Settings
 {
-
-namespace
-{
-
-constexpr QLatin1StringView IndentStep("    ");
-
-bool isInlineSpace(char32_t c)
-{
-    return c == U' ' || c == U'\t';
-}
-
-NodePath parentOf(const NodePath &path)
-{
-    return path.mid(0, path.size() - 1);
-}
-
-}
 
 ConfigDocument::ConfigDocument(const QString &text)
     : m_text(toCodePoints(text))
@@ -84,15 +70,90 @@ EditResult ConfigDocument::setNode(const QString &path, const QVariantMap &node)
         return insertChild(parent, node);
     }
     const Kdl::Span &span = located->node->span;
+    const QVariantMap ordered = withPropertyOrder(node, *located->node);
+    const bool hadChildren = !located->node->children.isEmpty();
+    const bool wantsChildren = !ordered.value(QStringLiteral("children")).toList().isEmpty();
+    if (span.childrenOpen >= 0 && ordered.contains(QStringLiteral("children")) && hadChildren == wantsChildren) {
+        return updateInPlace(located->path, ordered);
+    }
     std::u32string text = m_text;
-    if (node.contains(QStringLiteral("children"))) {
-        replace(text, span.start, span.end, writeNode(node, indentAt(span.start)));
+    if (ordered.contains(QStringLiteral("children"))) {
+        replace(text, span.start, span.end, writeNode(ordered, indentFor(located->path)));
     } else if (span.childrenOpen >= 0) {
-        replace(text, span.start, span.childrenOpen, writeNodeHead(node) + QLatin1Char(' '));
+        replace(text, span.start, span.childrenOpen, writeNodeHead(ordered) + QLatin1Char(' '));
     } else {
-        replace(text, span.start, span.end, writeNodeHead(node));
+        replace(text, span.start, span.end, writeNodeHead(ordered));
     }
     return commit(std::move(text), path);
+}
+
+EditResult ConfigDocument::updateInPlace(const NodePath &path, const QVariantMap &node)
+{
+    const std::u32string originalText = m_text;
+    const Kdl::Document originalDocument = m_document;
+    const Kdl::Node *existing = findNode(m_document, path);
+    QHash<QString, qsizetype> existingCounts;
+    for (const Kdl::Node &child : existing->children) {
+        ++existingCounts[child.name];
+    }
+    const Kdl::Span &span = existing->span;
+    std::u32string text = m_text;
+    replace(text, span.start, span.childrenOpen, writeNodeHead(node) + QLatin1Char(' '));
+    EditResult result = commit(std::move(text), formatPath(path));
+    QHash<QString, qsizetype> seen;
+    QStringList names;
+    for (const QVariant &child : node.value(QStringLiteral("children")).toList()) {
+        const QVariantMap childNode = child.toMap();
+        const QString name = childNode.value(QStringLiteral("name")).toString();
+        names.append(name);
+        if (result) {
+            result = setNode(formatPath(path + NodePath {PathSegment {name, seen[name]++}}), childNode);
+        }
+    }
+    for (auto count = existingCounts.constBegin(); result && count != existingCounts.constEnd(); ++count) {
+        for (qsizetype index = count.value() - 1; result && index >= seen.value(count.key()); --index) {
+            result = remove(formatPath(path + NodePath {PathSegment {count.key(), index}}));
+        }
+    }
+    if (result) {
+        result = orderChildren(path, names);
+    }
+    if (!result) {
+        m_text = originalText;
+        m_document = originalDocument;
+        return result;
+    }
+    return formatPath(path);
+}
+
+EditResult ConfigDocument::orderChildren(const NodePath &path, const QStringList &names)
+{
+    const QList<Kdl::Node> &children = findNode(m_document, path)->children;
+    QHash<QString, QList<qsizetype>> byName;
+    for (qsizetype index = 0; index < children.size(); ++index) {
+        byName[children.at(index).name].append(index);
+    }
+    QHash<QString, qsizetype> taken;
+    QList<qsizetype> order;
+    for (const QString &name : names) {
+        order.append(byName.value(name).at(taken[name]++));
+    }
+    if (std::ranges::is_sorted(order)) {
+        return formatPath(path);
+    }
+    QList<std::pair<qsizetype, qsizetype>> owned;
+    QStringList texts;
+    for (const Kdl::Node &child : children) {
+        owned.append(ownedRange(child.span));
+    }
+    for (const qsizetype index : std::as_const(order)) {
+        texts.append(slice(owned.at(index).first, owned.at(index).second));
+    }
+    std::u32string text = m_text;
+    for (qsizetype slot = owned.size() - 1; slot >= 0; --slot) {
+        replace(text, owned.at(slot).first, owned.at(slot).second, texts.at(slot));
+    }
+    return commit(std::move(text), formatPath(path));
 }
 
 EditResult ConfigDocument::remove(const QString &path)
@@ -113,71 +174,26 @@ EditResult ConfigDocument::remove(const QString &path)
         replace(text, span.start, end, QString());
         return commit(std::move(text), QString());
     }
-    const qsizetype lineEnd = std::min(end + ((end + 1 < size() && at(end) == U'\r' && at(end + 1) == U'\n') ? 2 : 1), size());
-    replace(text, attachedCommentStart(start, lineEnd), lineEnd, QString());
+    const qsizetype lineEnd = nextLineStart(end);
+    const qsizetype from = attachedCommentStart(start, lineEnd);
+    const qsizetype following = nextLineStart(lineEnd);
+    const QString above = from > 0 ? slice(previousLineStart(from), from).trimmed() : QString();
+    const bool blankAround
+        = lineEnd < size() && slice(lineEnd, following).trimmed().isEmpty() && (above.isEmpty() || above.endsWith(QLatin1Char('{')));
+    replace(text, from, blankAround ? following : lineEnd, QString());
     return commit(std::move(text), QString());
-}
-
-qsizetype ConfigDocument::size() const
-{
-    return static_cast<qsizetype>(m_text.size());
-}
-
-char32_t ConfigDocument::at(qsizetype index) const
-{
-    return m_text[static_cast<std::size_t>(index)];
-}
-
-qsizetype ConfigDocument::entryEnd(qsizetype position) const
-{
-    const auto skipSpaces = [this](qsizetype index) {
-        while (index < size() && isInlineSpace(at(index))) {
-            ++index;
-        }
-        return index;
-    };
-    qsizetype end = skipSpaces(position);
-    if (end < size() && at(end) == U';') {
-        end = skipSpaces(end + 1);
-    }
-    if (end + 1 < size() && at(end) == U'/' && at(end + 1) == U'/') {
-        while (end < size() && !Kdl::isNewline(at(end))) {
-            ++end;
-        }
-    }
-    return end;
-}
-
-qsizetype ConfigDocument::attachedCommentStart(qsizetype start, qsizetype lineEnd) const
-{
-    qsizetype nextLineEnd = lineEnd;
-    while (nextLineEnd < size() && !Kdl::isNewline(at(nextLineEnd))) {
-        ++nextLineEnd;
-    }
-    const QString nextLine = slice(lineEnd, nextLineEnd).trimmed();
-    if (!nextLine.isEmpty() && !nextLine.startsWith(QLatin1Char('}'))) {
-        return start;
-    }
-    while (start > 0) {
-        const qsizetype previous = lineStart(start - 1);
-        if (!slice(previous, start).trimmed().startsWith(QLatin1String("//"))) {
-            break;
-        }
-        start = previous;
-    }
-    return start;
 }
 
 EditResult ConfigDocument::append(const QString &parentPath, const QVariantMap &node)
 {
-    const auto parent = parsePath(parentPath);
+    const auto parent = locate(parentPath);
     if (!parent) {
         return std::unexpected(parent.error());
     }
-    if (const EditResult ensured = ensure(*parent); !ensured) {
+    if (const EditResult ensured = ensure(parent->path); !ensured) {
         return ensured;
     }
-    return insertChild(*parent, node);
+    return insertChild(parent->path, node);
 }
 
 EditResult ConfigDocument::move(const QString &path, int delta)
@@ -197,11 +213,13 @@ EditResult ConfigDocument::move(const QString &path, int delta)
     }
     const Kdl::Node *first = delta < 0 ? other : located->node;
     const Kdl::Node *second = delta < 0 ? located->node : other;
-    const QString firstText = slice(first->span.start, first->span.end);
-    const QString secondText = slice(second->span.start, second->span.end);
+    const auto [firstStart, firstEnd] = ownedRange(first->span);
+    const auto [secondStart, secondEnd] = ownedRange(second->span);
+    const QString firstText = slice(firstStart, firstEnd);
+    const QString secondText = slice(secondStart, secondEnd);
     std::u32string text = m_text;
-    replace(text, second->span.start, second->span.end, firstText);
-    replace(text, first->span.start, first->span.end, secondText);
+    replace(text, secondStart, secondEnd, firstText);
+    replace(text, firstStart, firstEnd, secondText);
     return commit(std::move(text), formatPath(target));
 }
 
@@ -238,18 +256,12 @@ EditResult ConfigDocument::insertChild(const NodePath &parentPath, const QVarian
     const QString name = node.value(QStringLiteral("name")).toString();
     NodePath resultPath = parentPath;
     resultPath.append(PathSegment {name, countNamed(childrenOf(m_document, parent), name)});
-    std::u32string text = m_text;
     if (!parent) {
-        QString prefix;
-        if (!m_text.empty()) {
-            prefix = m_text.back() == U'\n' ? QStringLiteral("\n") : QStringLiteral("\n\n");
-        }
-        replace(text, static_cast<qsizetype>(m_text.size()), static_cast<qsizetype>(m_text.size()),
-            prefix + writeNode(node, QString()) + QLatin1Char('\n'));
-        return commit(std::move(text), formatPath(resultPath));
+        return insertTopLevel(node, formatPath(resultPath));
     }
+    std::u32string text = m_text;
     const Kdl::Span &span = parent->span;
-    const QString parentIndent = indentAt(span.start);
+    const QString parentIndent = indentFor(parentPath);
     const QString indent = parentIndent + IndentStep;
     const QString nodeText = writeNode(node, indent);
     if (span.childrenOpen < 0) {
@@ -272,6 +284,25 @@ EditResult ConfigDocument::insertChild(const NodePath &parentPath, const QVarian
     return commit(std::move(text), formatPath(resultPath));
 }
 
+EditResult ConfigDocument::insertTopLevel(const QVariantMap &node, const QString &resultPath)
+{
+    std::u32string text = m_text;
+    if (!m_document.nodes.isEmpty() && Config::isForceResizableInclude(m_document.nodes.last())) {
+        const qsizetype includeStart = m_document.nodes.last().span.start;
+        const qsizetype line = lineStart(includeStart);
+        const bool ownsLine = slice(line, includeStart).trimmed().isEmpty();
+        const qsizetype position = ownsLine ? line : includeStart;
+        replace(text, position, position, writeNode(node, QString()) + (ownsLine ? QStringLiteral("\n\n") : QStringLiteral("\n")));
+        return commit(std::move(text), resultPath);
+    }
+    QString prefix;
+    if (!m_text.empty()) {
+        prefix = m_text.back() == U'\n' ? QStringLiteral("\n") : QStringLiteral("\n\n");
+    }
+    replace(text, size(), size(), prefix + writeNode(node, QString()) + QLatin1Char('\n'));
+    return commit(std::move(text), resultPath);
+}
+
 EditResult ConfigDocument::commit(std::u32string text, const QString &resultPath)
 {
     const QString candidate = QString::fromUcs4(text.data(), static_cast<qsizetype>(text.size()));
@@ -282,34 +313,6 @@ EditResult ConfigDocument::commit(std::u32string text, const QString &resultPath
     m_text = std::move(text);
     m_document = std::move(*parsed);
     return resultPath;
-}
-
-QString ConfigDocument::slice(qsizetype from, qsizetype to) const
-{
-    return QString::fromUcs4(m_text.data() + from, to - from);
-}
-
-QString ConfigDocument::indentAt(qsizetype position) const
-{
-    const qsizetype start = lineStart(position);
-    qsizetype end = start;
-    while (end < position && isInlineSpace(m_text[static_cast<std::size_t>(end)])) {
-        ++end;
-    }
-    return slice(start, end);
-}
-
-qsizetype ConfigDocument::lineStart(qsizetype position) const
-{
-    while (position > 0 && !Kdl::isNewline(m_text[static_cast<std::size_t>(position - 1)])) {
-        --position;
-    }
-    return position;
-}
-
-void ConfigDocument::replace(std::u32string &text, qsizetype from, qsizetype to, const QString &replacement) const
-{
-    text.replace(static_cast<std::size_t>(from), static_cast<std::size_t>(to - from), toCodePoints(replacement));
 }
 
 void ConfigDocument::reparse()

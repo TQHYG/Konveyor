@@ -16,6 +16,9 @@ GridView {
     property bool wideCards: false
     property bool showTitles: true
     property real cardSpacing: Kirigami.Units.largeSpacing * 0.75
+    property var keyOf: null
+    property var entries: []
+    property var shownEntries: []
     readonly property int shownCount: limit >= 0 ? Math.min(limit, count) : count
     readonly property int columns: Math.max(1, Math.floor(width / cellWidth))
     readonly property bool keyboardSelection: sectionActive && currentIndex >= 0
@@ -28,8 +31,19 @@ GridView {
     boundsBehavior: Flickable.StopAtBounds
     clip: scrolling || limit >= 0
     onCountChanged: if (visible) Qt.callLater(launcher.ensureSelection)
-    reuseItems: true
+    onCurrentItemChanged: if (currentItem && launcher.activationPending) Qt.callLater(launcher.activatePending)
     cacheBuffer: scrolling ? cellHeight * 2 : 0
+
+    function showEntries() {
+        const key = currentIndex >= 0 && currentIndex < shownEntries.length ? String(keyOf(shownEntries[currentIndex])) : ""
+        shownEntries = entries
+        model = entries
+        const at = key === "" ? -1 : entries.findIndex(entry => String(keyOf(entry)) === key)
+        if (at >= 0)
+            currentIndex = at
+    }
+    onEntriesChanged: if (keyOf) showEntries()
+    Component.onCompleted: if (keyOf) showEntries()
 
     function reset() {
         currentIndex = shownCount > 0 ? 0 : -1
@@ -71,12 +85,12 @@ GridView {
         return true
     }
     function activate() {
-        const item = currentIndex >= 0 && currentIndex < shownCount ? itemAtIndex(currentIndex) : null
+        const item = currentIndex >= 0 && currentIndex < shownCount ? currentItem : null
         if (item)
             item.activate()
     }
     function openMenu() {
-        const item = currentIndex >= 0 && currentIndex < shownCount ? itemAtIndex(currentIndex) : null
+        const item = currentIndex >= 0 && currentIndex < shownCount ? currentItem : null
         if (item)
             item.openMenu()
     }

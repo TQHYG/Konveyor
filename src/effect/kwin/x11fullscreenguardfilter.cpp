@@ -1,9 +1,13 @@
 #include "kwin/x11fullscreenguardfilter.h"
 
+#include "config/log.h"
+
 #include <main.h>
 #include <window.h>
 #include <workspace.h>
 #include <x11window.h>
+
+#include <QStringList>
 
 #include <algorithm>
 #include <cstdlib>
@@ -16,7 +20,7 @@ namespace Konveyor
 
 X11FullscreenGuardFilter::X11FullscreenGuardFilter(
     std::function<bool(KWin::Window *)> suppressFullscreenExit, std::function<bool(KWin::Window *)> suppressMinimize)
-    : KWin::X11EventFilter(QList<int> {XCB_CLIENT_MESSAGE, XCB_DESTROY_NOTIFY, XCB_FOCUS_IN, XCB_PROPERTY_NOTIFY})
+    : KWin::X11EventFilter(QList<int> {XCB_CLIENT_MESSAGE, XCB_DESTROY_NOTIFY, XCB_FOCUS_IN, XCB_PROPERTY_NOTIFY, XCB_CONFIGURE_REQUEST})
     , m_suppressFullscreenExit(std::move(suppressFullscreenExit))
     , m_suppressMinimize(std::move(suppressMinimize))
 {
@@ -38,10 +42,13 @@ X11FullscreenGuardFilter::~X11FullscreenGuardFilter()
 
 bool X11FullscreenGuardFilter::event(xcb_generic_event_t *genericEvent)
 {
-    const uint8_t eventType = genericEvent->response_type & ~0x80;
+    const uint8_t eventType = genericEvent->response_type & ~0x80U;
     switch (eventType) {
     case XCB_DESTROY_NOTIFY:
         handleDestroy(*reinterpret_cast<xcb_destroy_notify_event_t *>(genericEvent));
+        return false;
+    case XCB_CONFIGURE_REQUEST:
+        logConfigureRequest(*reinterpret_cast<xcb_configure_request_event_t *>(genericEvent));
         return false;
     case XCB_FOCUS_IN:
         return handleFocus(*reinterpret_cast<xcb_focus_in_event_t *>(genericEvent));
@@ -50,6 +57,33 @@ bool X11FullscreenGuardFilter::event(xcb_generic_event_t *genericEvent)
     default:
         return handleClientMessage(*reinterpret_cast<xcb_client_message_event_t *>(genericEvent));
     }
+}
+
+void X11FullscreenGuardFilter::logConfigureRequest(const xcb_configure_request_event_t &event)
+{
+    KWin::X11Window *window = KWin::Workspace::self()->findClient(event.window);
+    if (!window) {
+        return;
+    }
+    QStringList fields;
+    if (event.value_mask & XCB_CONFIG_WINDOW_X) {
+        fields << QStringLiteral("x=%1").arg(event.x);
+    }
+    if (event.value_mask & XCB_CONFIG_WINDOW_Y) {
+        fields << QStringLiteral("y=%1").arg(event.y);
+    }
+    if (event.value_mask & XCB_CONFIG_WINDOW_WIDTH) {
+        fields << QStringLiteral("width=%1").arg(event.width);
+    }
+    if (event.value_mask & XCB_CONFIG_WINDOW_HEIGHT) {
+        fields << QStringLiteral("height=%1").arg(event.height);
+    }
+    if (event.value_mask & XCB_CONFIG_WINDOW_STACK_MODE) {
+        fields << QStringLiteral("stack=%1").arg(event.stack_mode);
+    }
+    qCInfo(lcKonveyor).noquote() << "konveyor: X11" << window->resourceClass() << "asked to configure" << fields.join(QLatin1Char(' '))
+                                 << "fullscreen =" << window->isFullScreen() << "noBorder =" << window->noBorder()
+                                 << "current =" << window->frameGeometry();
 }
 
 void X11FullscreenGuardFilter::handleDestroy(const xcb_destroy_notify_event_t &event)
@@ -106,6 +140,7 @@ bool X11FullscreenGuardFilter::handleClientMessage(const xcb_client_message_even
     const bool ignoredActivation = event.type == m_netActiveWindow && event.data.data32[0] == 2 && event.data.data32[1] == 0
         && event.data.data32[3] == 0 && event.data.data32[4] == 0 && m_pretendMinimized.contains(window->window());
     if (ignoredActivation) {
+        qCInfo(lcKonveyor) << "konveyor: ignored X11 activation request from pretend-minimized" << window->resourceClass();
         return true;
     }
     if (event.type == m_wmChangeState) {
@@ -121,6 +156,8 @@ bool X11FullscreenGuardFilter::handleWmChangeState(const xcb_client_message_even
     if (event.data.data32[0] != XCB_ICCCM_WM_STATE_ICONIC) {
         return false;
     }
+    qCInfo(lcKonveyor) << "konveyor: X11" << window->resourceClass() << "asked to minimize, fullscreen state =" << hasFullscreenState(id)
+                       << "active =" << window->isActive();
     if (!hasFullscreenState(id)) {
         releasePretendedMinimize(id);
         m_repairedWindows.remove(id);
@@ -159,10 +196,15 @@ bool X11FullscreenGuardFilter::handleNetWmState(const xcb_client_message_event_t
     const bool fullscreen = event.data.data32[1] == m_netWmStateFullscreen || event.data.data32[2] == m_netWmStateFullscreen;
     const uint32_t action = event.data.data32[0];
     const bool leavingFullscreen = action == 0 || (action == 2 && window->isFullScreen());
+    if (fullscreen) {
+        qCInfo(lcKonveyor) << "konveyor: X11" << window->resourceClass() << "asked _NET_WM_STATE fullscreen action =" << action
+                           << "currently fullscreen =" << window->isFullScreen() << "active =" << window->isActive();
+    }
     if (!fullscreen || !leavingFullscreen) {
         return false;
     }
     if (m_suppressFullscreenExit(window)) {
+        qCInfo(lcKonveyor) << "konveyor: kept" << window->resourceClass() << "fullscreen because it is not active";
         return true;
     }
     auto *x11Window = qobject_cast<KWin::X11Window *>(window);
@@ -213,11 +255,11 @@ void X11FullscreenGuardFilter::restoreFocusHints(xcb_window_t window)
     }
     auto *hints = static_cast<uint32_t *>(xcb_get_property_value(reply));
     bool changed = false;
-    if ((hints[0] & 1) && hints[1] == 0) {
+    if ((hints[0] & 1U) && hints[1] == 0) {
         hints[1] = 1;
         changed = true;
     }
-    if ((hints[0] & 2) && hints[2] == XCB_ICCCM_WM_STATE_ICONIC) {
+    if ((hints[0] & 2U) && hints[2] == XCB_ICCCM_WM_STATE_ICONIC) {
         hints[2] = XCB_ICCCM_WM_STATE_NORMAL;
         changed = true;
     }

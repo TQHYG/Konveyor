@@ -16,14 +16,6 @@ int workspaceCount(Layout::Engine &engine, const QString &output)
     return count;
 }
 
-Config::NamedWorkspace namedWorkspace(const QString &name, std::optional<QString> output = std::nullopt)
-{
-    Config::NamedWorkspace named;
-    named.name = name;
-    named.openOnOutput = std::move(output);
-    return named;
-}
-
 QStringList workspaceNames(Layout::Engine &engine, const QString &output)
 {
     QStringList names;
@@ -211,6 +203,22 @@ private Q_SLOTS:
             workspaceNames(fixture.engine(), QStringLiteral("DP-1")), QStringList({QStringLiteral("b"), QStringLiteral("d"), QString()}));
         QCOMPARE(
             workspaceNames(fixture.engine(), QStringLiteral("DP-2")), QStringList({QStringLiteral("a"), QStringLiteral("c"), QString()}));
+        VERIFY_INVARIANTS(fixture);
+    }
+
+    void namedWorkspaceRemovedFromTheConfigLosesItsName()
+    {
+        Fixture fixture;
+        Config::Config config = instantConfig();
+        config.workspaces = {namedWorkspace(QStringLiteral("browser")), namedWorkspace(QStringLiteral("chat"))};
+        fixture.setConfig(config);
+        fixture.perform(QStringLiteral("set-workspace-name"), {QStringLiteral("mine")});
+        config.workspaces = {namedWorkspace(QStringLiteral("chat"))};
+        fixture.setConfig(config);
+        const QStringList names = workspaceNames(fixture.engine(), QStringLiteral("DP-1"));
+        QVERIFY(!names.contains(QStringLiteral("browser")));
+        QVERIFY(names.contains(QStringLiteral("chat")));
+        QVERIFY(names.contains(QStringLiteral("mine")));
         VERIFY_INVARIANTS(fixture);
     }
 

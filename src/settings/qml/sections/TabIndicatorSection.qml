@@ -3,6 +3,7 @@ import QtQuick.Layouts
 import QtQuick.Controls as QQC2
 import org.kde.kirigami as Kirigami
 import "../components"
+import "LayoutKeys.js" as LayoutKeys
 import org.kde.konveyor.settings
 
 ColumnLayout {
@@ -17,11 +18,7 @@ ColumnLayout {
     readonly property bool shown: tab.enabled === true
 
     function writeFlag(name, on) {
-        if (on || root.overrideMode) {
-            SettingsStore.setValue(blockPath + "/" + name, on ? [] : [false]);
-        } else {
-            SettingsStore.remove(blockPath + "/" + name);
-        }
+        LayoutKeys.writeFlag(SettingsStore, blockPath, overrideMode, name, on, false);
     }
 
     spacing: 0
@@ -53,7 +50,7 @@ ColumnLayout {
             enabled: root.shown
             subPaths: ["position", "place-within-column"]
             label: "Placement"
-            description: "Click a side of the column. Inside the column puts the marks over the window instead of in the gap."
+            description: "Click a side of the column. Inside the column shrinks the window to make room for the marks. Outside, they sit in the gap, which widens when they do not fit."
             iconName: "align-vertical-center"
 
             ColumnLayout {

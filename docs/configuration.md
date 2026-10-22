@@ -25,7 +25,40 @@ binds {
 }
 ```
 
-You get gaps, borders, a focus ring, tab indicators, preset widths, centering modes, per-monitor and per-workspace overrides, window rules, animation springs and key binds. Two KDE-specific extras: `active-color "accent"` follows the KDE accent color, and `gestures { titlebar-drag "scroll-view" }` scrolls the row when you drag a window by its title bar.
+You get gaps, borders, a focus ring, tab indicators, preset widths, centering modes, per-monitor and per-workspace overrides, window rules, animation springs and key binds. Two KDE-specific extras: `active-color "accent"` follows the KDE accent color, and `gestures { titlebar-drag "scroll-view" }` scrolls the row when you drag a window by its title bar instead of moving the window. Dragging a tiled window's edge resizes its column; `gestures { resize-tiled-windows false; }` turns that off.
+
+Layout settings come in four levels: `layout` for every monitor, the first `monitor-profile` a monitor matches, the monitor's own `output` block, and a named `workspace`. Each level changes only the settings it lists and takes everything else from the level before it. An `output` block that only sets `gaps` keeps its profile's column widths, and a workspace that only sets `gaps` keeps the struts and borders of the monitor it is on.
+
+```kdl
+monitor-profile "portrait" {
+    match aspect-ratio-below=1.0
+    layout { default-column-width { proportion 1.0; }; }
+}
+
+output "DP-2" {
+    layout { gaps 8; }
+}
+```
+
+## Fixed workspaces
+
+Settings → Workspaces → **Use a fixed number of workspaces** keeps a chosen number of numbered workspaces on every monitor, including empty ones. Choose **Workspaces per monitor** from 1 to 20; Konveyor sets KDE's virtual desktop count to match. The default remains dynamic, with a new empty workspace at the bottom and empty unnamed workspaces removed automatically.
+
+```kdl
+layout {
+    fixed-workspace-count 4
+}
+```
+
+`horizontal-desktops` lays out KDE's virtual desktops side by side in one row instead of one column, so pager widgets on a thin top or bottom panel stay thin. Settings → Workspaces → **Lay out KDE desktops horizontally** turns it on. It only changes how KDE arranges its desktops; Konveyor's workspaces still move up and down. This option is global.
+
+`fixed-workspace-count 0` restores dynamic workspaces. This option is global. Fixed mode ignores `empty-workspace-above-first`, allows the last workspace to hold windows, and keeps workspace numbers when windows close. Switching modes and changing the count apply immediately.
+
+When reducing the count or collecting workspaces from a disconnected monitor, extra unnamed workspaces combine into a remaining workspace, preserving their windows, tiled columns, and floating windows. Named workspaces are always kept: the number of names on a monitor is its minimum count, even when that exceeds the requested count. Reconnecting a monitor restores named workspaces to their configured home; combined unnamed workspaces stay together.
+
+## Mouse, wheel and touchpad binds
+
+Besides keys, binds take `MouseLeft`, `MouseRight`, `MouseMiddle`, `MouseBack`, `MouseForward`, `WheelScrollUp`/`Down`/`Left`/`Right` and `TouchpadScrollUp`/`Down`/`Left`/`Right`, with or without modifiers. KWin's own wheel shortcuts come first: Meta+Ctrl with the vertical wheel zooms (the Zoom effect) and Meta+Alt with it switches desktops, so a bind on one of those only runs once that KWin shortcut is changed or turned off. `ISO_Level3_Shift` (AltGr) and `ISO_Level5_Shift` work as modifiers and as `mod-key`; KDE's shortcut system cannot hold them, so Konveyor catches those binds itself.
 
 ## Placing new windows
 

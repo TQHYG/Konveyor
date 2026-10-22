@@ -46,6 +46,7 @@ Match decodeMatch(const Kdl::Node &node)
     table.insert(QStringLiteral("app-id"), [&match](const Kdl::Value &value) { match.appId = compileRegex(value); });
     table.insert(QStringLiteral("title"), [&match](const Kdl::Value &value) { match.title = compileRegex(value); });
     table.insert(QStringLiteral("monitor-profile"), [&match](const Kdl::Value &value) { match.monitorProfile = compileRegex(value); });
+    table.insert(QStringLiteral("output"), [&match](const Kdl::Value &value) { match.output = compileRegex(value); });
     addMatchBooleans(table, match);
     decodeProperties(node, table);
     return match;
@@ -94,19 +95,7 @@ void addOpenHandlers(NodeTable &table, WindowRule &rule)
     boolOf(QStringLiteral("open-floating"), rule.openFloating);
     boolOf(QStringLiteral("manage"), rule.manage);
     table.insert(QStringLiteral("column-position"), [&rule](const Kdl::Node &node) {
-        static const QList<std::pair<QString, ColumnPosition>> positions {
-            {QStringLiteral("start"), ColumnPosition::Start},
-            {QStringLiteral("end"), ColumnPosition::End},
-        };
-        const Kdl::Value value = requiredArgument(node, QStringLiteral("position"));
-        const QString text = toText(value);
-        for (const auto &[name, position] : positions) {
-            if (text == name) {
-                rule.columnPosition = position;
-                return;
-            }
-        }
-        failAt(value.location, QStringLiteral("column-position must be \"start\" or \"end\""));
+        rule.columnPosition = static_cast<ColumnPosition>(keywordArgument(node, {QStringLiteral("start"), QStringLiteral("end")}));
     });
     table.insert(QStringLiteral("group-app-windows"), [&rule](const Kdl::Node &node) {
         rule.groupAppWindows = static_cast<GroupAppWindows>(
@@ -122,7 +111,16 @@ void addOpenHandlers(NodeTable &table, WindowRule &rule)
     boolOf(QStringLiteral("force-resizable"), rule.forceResizable);
     boolOf(QStringLiteral("open-focused"), rule.openFocused);
     textOf(QStringLiteral("open-on-output"), rule.openOnOutput);
-    textOf(QStringLiteral("open-on-workspace"), rule.openOnWorkspace);
+    table.insert(QStringLiteral("open-on-workspace"), [&rule](const Kdl::Node &node) {
+        if (node.arguments.size() == 1 && node.arguments.first().isInteger()) {
+            rule.openOnWorkspaceIndex = static_cast<int>(integerArgument(node, Range {1, 999}));
+        } else {
+            rule.openOnWorkspace = stringArgument(node);
+        }
+    });
+    table.insert(QStringLiteral("open-at-column"),
+        [&rule](const Kdl::Node &node) { rule.openAtColumn = static_cast<int>(integerArgument(node, Range {1, 999})); });
+    boolOf(QStringLiteral("open-on-all-workspaces"), rule.openOnAllWorkspaces);
     table.insert(QStringLiteral("default-column-width"),
         [&rule](const Kdl::Node &node) { rule.defaultColumnWidth = decodeDefaultPresetSize(node); });
     table.insert(QStringLiteral("default-window-height"),
@@ -145,13 +143,23 @@ void addSizeHandlers(NodeTable &table, WindowRule &rule)
     sizeOf(QStringLiteral("max-height"), rule.maxHeight);
 }
 
+void checkSizeLimit(const Kdl::Node &node, const QString &dimension, const std::optional<int> &minimum, const std::optional<int> &maximum)
+{
+    if (!minimum || !maximum || *maximum == 0 || *minimum <= *maximum) {
+        return;
+    }
+    const QString maxName = QStringLiteral("max-") + dimension;
+    fail(*node.child(maxName),
+        quoteName(maxName) + QStringLiteral(" must be 0 or at least ") + quoteName(QStringLiteral("min-") + dimension));
+}
+
 void addDynamicHandlers(NodeTable &table, WindowRule &rule)
 {
     const auto boolOf = [&table](const QString &name, std::optional<bool> &target) {
         table.insert(name, [&target](const Kdl::Node &node) { target = booleanArgument(node); });
     };
     boolOf(QStringLiteral("clip-to-geometry"), rule.clipToGeometry);
-    table.insert(QStringLiteral("opacity"), [&rule](const Kdl::Node &node) { rule.opacity = numberArgument(node, AnyNumber); });
+    table.insert(QStringLiteral("opacity"), [&rule](const Kdl::Node &node) { rule.opacity = numberArgument(node, Range {0, 1}); });
     table.insert(
         QStringLiteral("geometry-corner-radius"), [&rule](const Kdl::Node &node) { rule.geometryCornerRadius = decodeCornerRadius(node); });
 }
@@ -176,6 +184,8 @@ WindowRule decodeWindowRule(const Kdl::Node &node)
     addDynamicHandlers(table, rule);
     addAppearanceHandlers(table, rule);
     decodeChildren(node, table, {QStringLiteral("match"), QStringLiteral("exclude")});
+    checkSizeLimit(node, QStringLiteral("width"), rule.minWidth, rule.maxWidth);
+    checkSizeLimit(node, QStringLiteral("height"), rule.minHeight, rule.maxHeight);
     return rule;
 }
 

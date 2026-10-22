@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ ${GITHUB_ACTIONS:-} != true ]]; then
+    printf 'This test runs a privileged container with systemd as PID 1, which replays udev events on the host and can kill the desktop session. It only runs in GitHub Actions.\n' >&2
+    exit 1
+fi
+
 cd "$(dirname "$0")/../.."
 CONTAINER="konveyor-install-test"
 IMAGE="${KONVEYOR_TEST_IMAGE:-archlinux:latest}"
@@ -47,6 +52,9 @@ as_tester /opt/install-test/verify.sh
 step "Uninstalling Konveyor"
 as_tester ./uninstall.sh
 sleep 10
+
+step "Checking that uninstalling gave the shortcuts back"
+as_tester /opt/install-test/verify.sh uninstalled
 
 step "Checking that uninstalling left the system as it was"
 as_root /opt/install-test/snapshot.sh after

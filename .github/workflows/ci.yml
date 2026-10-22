@@ -5,6 +5,16 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      job:
+        description: Which job to run
+        type: choice
+        default: all
+        options: [all, checks, install, sanitizers, distros]
+      tests:
+        description: Run only the ctest tests matching this regex in the checks job (skips lint, coverage and xunused)
+        type: string
+        default: ""
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,26 +22,65 @@ concurrency:
 
 jobs:
   checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'checks'
     name: Build, test and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Restore the compiler cache
+        id: compiler-cache
+        uses: actions/cache/restore@v6
+        with:
+          path: .ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: ccache-
+
+      - name: Give KWin /dev/udmabuf, so it composites with OpenGL on Mesa's llvmpipe
+        run: tests/nested/ci/udmabuf.sh
+
+      - name: Lint, build, run the unit and nested KWin tests with coverage and check it against tests/coverage/thresholds.json
+        env:
+          KONVEYOR_CI_TESTS: ${{ inputs.tests }}
+        run: >-
+          docker run --rm -e KONVEYOR_CI_TESTS --device /dev/udmabuf --shm-size 2g --security-opt seccomp=unconfined
+          -v "$GITHUB_WORKSPACE:/src" -w /src archlinux:base-devel tests/nested/ci/run.sh
+
+      - name: Save the compiler cache
+        if: ${{ !cancelled() && steps.compiler-cache.outcome == 'success' && steps.compiler-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@v6
+        with:
+          path: .ccache
+          key: ${{ steps.compiler-cache.outputs.cache-primary-key }}
+
+      - name: Publish the coverage summary
+        if: always() && hashFiles('build-coverage/coverage/summary.md') != ''
+        run: cat build-coverage/coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the coverage report
+        if: always() && hashFiles('build-coverage/coverage/summary.md') != ''
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: |
+            build-coverage/coverage/html
+            build-coverage/coverage/summary.md
+            build-coverage/coverage/cpp.json
+            build-coverage/coverage/python.json
+
+  sanitizers:
+    if: github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'sanitizers'
+    name: Layout tests under sanitizers
     runs-on: ubuntu-latest
     container:
       image: archlinux:base-devel
     steps:
-      - name: Install the check tools
-        run: pacman -Syu --noconfirm --needed git cmake ninja clang llvm wayland-protocols typos nodejs npm
+      - name: Install the build tools
+        run: pacman -Syu --noconfirm --needed git cmake ninja wayland-protocols
 
-      - name: Build xunused
-        run: |
-          git clone https://github.com/mgehre/xunused.git /tmp/xunused
-          git -C /tmp/xunused checkout b81e0ef
-          if [[ ! -f /usr/include/clang/Driver/Options.h ]]; then
-            sed -i 's|#include "clang/Driver/Options.h"|#include "clang/Options/Options.h"|' /tmp/xunused/main.cpp
-          fi
-          cmake -S /tmp/xunused -B /tmp/xunused/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build /tmp/xunused/build
-          install -Dm755 /tmp/xunused/build/xunused /usr/local/bin/xunused
-
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -41,10 +90,11 @@ jobs:
       - name: Install Konveyor's dependencies
         run: extras/packaging/dependencies.sh
 
-      - name: Run the full check suite
-        run: ./tools/check.sh
+      - name: Run the layout tests with AddressSanitizer, UndefinedBehaviorSanitizer and libstdc++ assertions
+        run: ./tools/sanitize.sh layout
 
   distros:
+    if: github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'distros'
     name: Install dependencies and build on ${{ matrix.name }}
     runs-on: ubuntu-latest
     strategy:
@@ -83,7 +133,7 @@ jobs:
       - name: Install Plasma
         run: ${{ matrix.plasma }}
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -99,12 +149,16 @@ jobs:
           find staging -path '*/plasma/kcms/systemsettings/kcm_konveyor.so' | grep .
 
   install:
+    if: github.event_name != 'workflow_dispatch' || inputs.job == 'all' || inputs.job == 'install'
     name: Install, check and uninstall on Arch Linux
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      - name: Give KWin a vgem render node, so it composites with OpenGL on Mesa's llvmpipe
+        run: tests/nested/ci/vgem.sh
 
       - name: Install, check and uninstall Konveyor in a Plasma session
         run: tests/install/run.sh
@@ -117,18 +171,19 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          submodules: recursive
 
       - name: Create the source archive
         run: |
           version="${GITHUB_REF_NAME#v}"
-          git archive --format=tar.gz --prefix="konveyor-${version}/" -o "konveyor-${version}.tar.gz" HEAD
+          tools/source-archive.sh "$version"
           sha256sum "konveyor-${version}.tar.gz" > "konveyor-${version}.tar.gz.sha256"
 
       - name: Publish the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             konveyor-*.tar.gz

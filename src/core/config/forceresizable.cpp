@@ -5,6 +5,7 @@
 
 #include <QRegularExpression>
 
+#include <algorithm>
 #include <ranges>
 #include <string>
 
@@ -142,12 +143,12 @@ QString updateRule(const QString &text, const Kdl::Node &rule, bool enabled)
     return fromCodePoints(updated);
 }
 
-bool isOverrideInclude(const Kdl::Node &node)
+}
+
+bool isForceResizableInclude(const Kdl::Node &node)
 {
     return node.name == QLatin1String("include") && node.arguments.size() == 1 && node.arguments.first().isString()
         && node.arguments.first().toString() == OverrideFile;
-}
-
 }
 
 std::expected<QString, QString> setForceResizableRule(const QString &text, const QString &fileName, const QString &appId, bool enabled)
@@ -166,13 +167,13 @@ std::expected<QString, QString> setForceResizableRule(const QString &text, const
     return candidate;
 }
 
-std::expected<QString, QString> ensureTrailingForceResizableInclude(const QString &text, const QString &fileName)
+std::expected<QString, QString> ensureForceResizableInclude(const QString &text, const QString &fileName)
 {
     const auto document = Kdl::parse(text, fileName);
     if (!document) {
         return std::unexpected(document.error().toString());
     }
-    if (!document->nodes.isEmpty() && isOverrideInclude(document->nodes.last())) {
+    if (std::ranges::any_of(document->nodes, isForceResizableInclude)) {
         return text;
     }
     return appendBlock(text, QStringLiteral("include \"force-resizable.kdl\"\n"));

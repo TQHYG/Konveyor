@@ -92,10 +92,11 @@ public:
     void focusUpOrRight();
     void focusTop();
     void focusBottom();
-    void moveColumnToIndex(std::size_t index);
+    void moveColumnToIndex(std::size_t index, std::optional<WindowId> window);
     bool moveLeft();
     bool moveRight();
     void placeColumnWithinPins(std::size_t from);
+    void placeColumnsWithinPins();
     void activateAfterRemovingActive(std::size_t removedIndex, const Config::AnimationParams &viewConfig);
     DropSlot unpinnedDropSlotAt(QPointF pos) const;
     std::size_t allowedColumnIndex(
@@ -109,8 +110,8 @@ public:
     void consumeIntoColumn();
     void expelFromColumn();
     void swapWindowInDirection(ScrollDirection direction);
-    void toggleColumnTabbedDisplay();
-    void setColumnDisplay(Config::ColumnDisplay display);
+    void toggleColumnTabbedDisplay(std::optional<WindowId> window);
+    void setColumnDisplay(Config::ColumnDisplay display, std::optional<WindowId> window);
     void centerColumn();
     void centerWindow(std::optional<WindowId> window);
     void centerVisibleColumns();
@@ -127,19 +128,18 @@ public:
     Column *columnById(quint64 columnId);
     std::optional<QRectF> dropSlotRect(DropSlot position) const;
 
-    void toggleWidth(bool forwards, bool fromNative = false);
     void toggleFillWidth();
     void toggleFillWidthFor(WindowId window);
     void setWindowWidth(std::optional<WindowId> window, SizeChange change);
     void setWindowHeight(std::optional<WindowId> window, SizeChange change);
     void resetWindowHeight(std::optional<WindowId> window);
-    void toggleWindowWidth(std::optional<WindowId> window, bool forwards);
+    void toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative);
     void toggleWindowHeight(std::optional<WindowId> window, bool forwards);
     void expandColumnToAvailableWidth();
     bool setFullscreen(WindowId window, bool fullscreen);
     bool setMaximized(WindowId window, bool maximize);
     bool drawsAbovePanels() const;
-    std::optional<WindowId> windowUnder(QPointF pos) const;
+    std::optional<WindowHit> windowUnder(QPointF pos) const;
 
     void beginSwipe(bool isTouchpad);
     std::optional<bool> updateSwipe(double deltaX, Anim::Duration timestamp, bool isTouchpad);
@@ -156,6 +156,7 @@ public:
     QString checkConsistency() const;
     QString verifyArea() const;
     QString verifyColumns() const;
+    QString verifyView() const;
 
 private:
     void stackLooseColumns(std::size_t maxRows);
@@ -192,13 +193,14 @@ private:
     void selectColumnWith(std::size_t idx, const Config::AnimationParams &config);
     void animateColumnsAfter(std::size_t idx, double offset, const Config::AnimationParams &config, bool inclusiveBefore);
     void moveColumnTo(std::size_t requestedIndex);
+    void moveInactiveColumn(std::size_t from, std::size_t requestedIndex);
     void cancelResizeForColumn(Column &column);
     void consumeOrExpelWindow(std::optional<WindowId> window, ScrollDirection direction);
     void consumeLeftIntoAdjacent(Location source, QPointF prevOff, bool sourceWasActive);
     void expelLeft(Location source, QPointF prevOff, bool sourceWasActive);
     void consumeRightIntoAdjacent(Location source, QPointF prevOff, bool sourceWasActive);
     void expelRight(Location source, QPointF prevOff, bool sourceWasActive);
-    void swapTiles(std::size_t sourceColumnIndex, std::size_t targetColumnIndex, ScrollDirection direction);
+    void swapTiles(std::size_t sourceColumnIndex, std::size_t targetColumnIndex);
     void updateActiveColumnViewAfterUpdate(
         std::size_t colIndex, std::optional<quint8> resizeEdges, double offset, bool wasNormal, bool ongoingResizeAnim);
     void moveOtherColumnsForResize(std::size_t colIndex, double offset, bool ongoingResizeAnim);

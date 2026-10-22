@@ -1,5 +1,6 @@
 #include "layout/engine/engineprivate.h"
 
+#include "config/log.h"
 #include "layout/common/geometry.h"
 
 #include <algorithm>
@@ -32,9 +33,9 @@ Activation activationFor(const std::optional<bool> &openFocused, ActivationPolic
     return Activation::Smart;
 }
 
-MatchContext contextFor(const WindowProperties &properties, bool isFloating, const QString &monitorProfile = {})
+MatchContext contextFor(const WindowProperties &properties, bool isFloating, const QString &monitorProfile = {}, const QString &output = {})
 {
-    return {properties.appId, properties.title, monitorProfile, false, false, true, isFloating, properties.isUrgent};
+    return {properties.appId, properties.title, monitorProfile, false, false, true, isFloating, properties.isUrgent, output};
 }
 
 }
@@ -77,6 +78,9 @@ Workspace *Engine::Private::workspaceForNewWindow(NewWindowPlan &plan)
     if (plan.rules.openOnWorkspace) {
         workspaceIndex = monitor.workspaceNamed(*plan.rules.openOnWorkspace).value_or(workspaceIndex);
         plan.workspace = monitor.workspaces()[workspaceIndex].id();
+    } else if (plan.rules.openOnWorkspaceIndex) {
+        workspaceIndex = std::min(static_cast<std::size_t>(*plan.rules.openOnWorkspaceIndex - 1), monitor.workspaces().size() - 1);
+        plan.workspace = monitor.workspaces()[workspaceIndex].id();
     }
     return &monitor.workspaces()[workspaceIndex];
 }
@@ -87,20 +91,26 @@ NewWindowPlan Engine::Private::planNewWindow(
     auto &self = const_cast<Private &>(*this);
     NewWindowPlan plan;
     plan.rules = resolveWindowRules(config.windowRules, contextFor(properties, false), atStartup());
+    plan.monitorIndex = monitorForNewWindow(plan, properties, preferredOutput).value_or(activeMonitorIndex);
+    NewWindowPlan probe = plan;
+    const Workspace *target = self.workspaceForNewWindow(probe);
+    const Config::Layout &layout = target ? target->options()->layout : options->layout;
 
-    const bool childWindow = plan.rules.floatChildWindows.value_or(config.layout.floatChildWindows) && appHasWindow(properties.appId);
+    const bool childWindow = plan.rules.floatChildWindows.value_or(layout.floatChildWindows) && appHasWindow(properties.appId);
     const bool autoFloat = properties.parent.has_value() || properties.isDialog || childWindow;
     plan.isFloating = plan.rules.openFloating.value_or(autoFloat);
     plan.rules = resolveWindowRules(config.windowRules, contextFor(properties, plan.isFloating), atStartup());
 
     const auto monitorIndex = monitorForNewWindow(plan, properties, preferredOutput);
-    if (properties.parent && (!monitorIndex || monitorIndex == monitorIndexOf(*properties.parent))) {
+    if (properties.parent && self.workspaceOf(*properties.parent)
+        && (!monitorIndex || monitorIndex == monitorIndexOf(*properties.parent))) {
         plan.parent = properties.parent;
     }
     plan.monitorIndex = monitorIndex.value_or(activeMonitorIndex);
     if (plan.monitorIndex < monitors.size()) {
-        const QString profile = monitorProfileName(config, monitors[plan.monitorIndex].area());
-        plan.rules = resolveWindowRules(config.windowRules, contextFor(properties, plan.isFloating, profile), atStartup());
+        const OutputArea &area = monitors[plan.monitorIndex].area();
+        plan.rules = resolveWindowRules(
+            config.windowRules, contextFor(properties, plan.isFloating, monitorProfileName(config, area), area.outputName), atStartup());
     }
 
     plan.wantsFullscreen = wantsExpanded(properties.wantsFullscreen, plan.rules.openFullscreen);
@@ -110,7 +120,7 @@ NewWindowPlan Engine::Private::planNewWindow(
     if (Workspace *workspace = self.workspaceForNewWindow(plan)) {
         plan.width = workspace->defaultWidthFor(plan.rules.defaultWidth, plan.isFloating);
         plan.height = workspace->defaultHeightFor(plan.rules.defaultHeight, plan.isFloating);
-        applyRememberedSize(plan, properties.appId);
+        applyRememberedSize(plan, properties.appId, workspace->options()->layout);
     }
     return plan;
 }
@@ -167,23 +177,26 @@ MonitorAddRequest makeAddRequest(const NewWindowPlan &plan, ColumnWidth width)
 
 Workspace *Engine::Private::workspaceForPlacement(const NewWindowPlan &plan)
 {
-    if (monitors.empty() && orphanWorkspaces.empty()) {
-        orphanWorkspaces.emplace_back(OutputArea(), clock, options, std::nullopt);
-    }
     if (Workspace *workspace = plan.workspace ? workspaceById(*plan.workspace) : nullptr) {
         return workspace;
     }
     if (plan.monitorIndex < monitors.size()) {
         return &monitors[plan.monitorIndex].activeWorkspace();
     }
+    if (Workspace *workspace = plan.parent ? workspaceOf(*plan.parent) : nullptr) {
+        return workspace;
+    }
     return activeWorkspace();
 }
 
-void Engine::Private::finishPlacement(WindowId id, const NewWindowPlan &plan)
+void Engine::Private::finishPlacement(WindowId id, const NewWindowPlan &plan, const std::optional<RestorePlacement> &restore)
 {
     Workspace *placed = workspaceOf(id);
     if (!placed) {
         return;
+    }
+    if (restore) {
+        restorePresentation(*placed, id, *restore);
     }
     if (!plan.isFloating && plan.height) {
         placed->setWindowHeight(id, sizeChangeFromPreset(*plan.height));
@@ -206,15 +219,24 @@ void Engine::Private::placeNewWindow(
     }
 
     Tile tile = workspace->createTile(makeNewWindow(id, properties, plan, *workspace));
+    if (restore) {
+        tile.savedFloatingSize = restore->savedFloatingSize;
+        tile.savedFloatingPosition = restore->savedFloatingPosition;
+    }
     const auto remembered = windowMemory.constFind(properties.appId);
-    if (plan.isFloating && config.layout.rememberWindowPositions && remembered != windowMemory.constEnd() && remembered->floatingPosition
-        && !plan.rules.defaultFloatingPosition) {
+    if (!restore && plan.isFloating && workspace->options()->layout.rememberWindowPositions && remembered != windowMemory.constEnd()
+        && remembered->floatingPosition && !plan.rules.defaultFloatingPosition) {
         tile.savedFloatingPosition = remembered->floatingPosition;
     }
     const ColumnWidth width = workspace->tiledWidthFor(tile.window(), plan.width);
     MonitorAddRequest request = makeAddRequest(plan, width);
-    if ((restore && placeRestored(tile, plan, *restore, request)) || (!restore && placeInAppGroup(tile, plan, *workspace, request))) {
-        finishPlacement(id, plan);
+    if (!restore && plan.rules.openAtColumn && !plan.isFloating && !plan.parent) {
+        const std::size_t columns = workspace->scrolling().columns().size();
+        request.target
+            = MonitorAddTarget::onWorkspace(workspace->id(), std::min(static_cast<std::size_t>(*plan.rules.openAtColumn - 1), columns));
+    } else if ((restore && placeRestored(tile, plan, *restore, request))
+        || (!restore && placeInAppGroup(tile, plan, *workspace, request))) {
+        finishPlacement(id, plan, restore);
         return;
     }
 
@@ -225,7 +247,7 @@ void Engine::Private::placeNewWindow(
             = request.target.kind == MonitorAddTarget::Kind::NextTo ? AddTarget::besideWindow(request.target.window) : AddTarget();
         workspace->addTile(std::move(tile), {target, request.activate, width, plan.fillsWidth, plan.isFloating, std::nullopt});
     }
-    finishPlacement(id, plan);
+    finishPlacement(id, plan, restore);
 }
 
 bool Engine::hasWindow(WindowId id) const
@@ -235,50 +257,55 @@ bool Engine::hasWindow(WindowId id) const
 
 void Engine::updateWindowProperties(WindowId id, const WindowProperties &properties)
 {
-    Workspace *workspace = d->workspaceOf(id);
-    if (!workspace) {
+    Tile *tile = d->tileOf(id);
+    if (!tile) {
         return;
     }
-    for (const TileRef &ref : workspace->renderedTilesMut(false)) {
-        if (ref.tile->id() != id) {
-            continue;
+    LayoutWindow &window = tile->window();
+    const bool parentChanged = window.properties().parent != properties.parent;
+    const bool wasLocked = d->isLockedToOutputSize(id);
+    window.setProperties(properties);
+    window.setUrgent(properties.isUrgent);
+    window.markRulesDirty();
+    if (Workspace *workspace = d->workspaceOf(id)) {
+        if (parentChanged && properties.parent) {
+            workspace->childrenAdded(*properties.parent);
         }
-        LayoutWindow &window = ref.tile->window();
-        const bool parentChanged = window.properties().parent != properties.parent;
-        window.setProperties(properties);
-        window.setUrgent(properties.isUrgent);
-        window.markRulesDirty();
-        if (parentChanged) {
-            workspace->childrenAdded(id);
-        }
-        break;
+        workspace->updateWindow(id);
+    } else {
+        tile->updateWindow();
     }
-    workspace->updateWindow(id);
+    if (!wasLocked && window.requestedMode() != WindowMode::Fullscreen && d->isLockedToOutputSize(id)) {
+        d->floatOverOutput(id);
+    }
     d->refresh();
 }
 
 void Engine::windowSizeCommitted(WindowId id, const QSizeF &frameSize)
 {
-    Workspace *workspace = d->workspaceOf(id);
-    if (!workspace) {
+    Tile *tile = d->tileOf(id);
+    if (!tile) {
         return;
     }
-    bool changed = false;
-    for (const TileRef &ref : workspace->renderedTilesMut(false)) {
-        if (ref.tile->id() == id) {
-            changed = ref.tile->window().commit(frameSize);
-            break;
+    if (tile->window().commit(frameSize)) {
+        if (Workspace *workspace = d->workspaceOf(id)) {
+            workspace->updateWindow(id);
+        } else {
+            tile->updateWindow();
         }
-    }
-    if (changed) {
-        workspace->updateWindow(id);
     }
     d->refresh();
 }
 
 void Engine::setFloatingFrame(WindowId id, const QRectF &frame)
 {
-    Monitor *monitor = d->monitorOf(id);
+    d->setFloatingFrame(id, frame);
+    d->refresh();
+}
+
+void Engine::Private::setFloatingFrame(WindowId id, const QRectF &frame)
+{
+    Monitor *monitor = monitorOf(id);
     const std::optional<std::size_t> index = monitor ? monitor->workspaceOfWindow(id) : std::nullopt;
     if (!index) {
         return;
@@ -288,13 +315,13 @@ void Engine::setFloatingFrame(WindowId id, const QRectF &frame)
     if (!tile || !workspace.isFloating(id)) {
         return;
     }
-    const QPointF origin = d->originOf(monitor->outputName()) + QPointF(0.0, monitor->workspaceRenderOffsets()[*index]);
+    const QPointF origin = originOf(monitor->outputName()) + QPointF(0.0, workspaceRenderOffsets(*monitor)[*index]);
     workspace.setFloatingFrame(id, frame.topLeft() - origin - tile->windowOffset(), frame.size());
-    d->refresh();
 }
 
 void Engine::activateWindow(WindowId id)
 {
+    qCInfo(lcKonveyor) << "konveyor: layout activating window" << id;
     if (d->focusWindow(id)) {
         d->announcedFocus = id;
         d->refresh();
@@ -328,34 +355,42 @@ void Engine::setLayoutFocused(bool focused)
 
 void Engine::setWindowFullscreen(WindowId id, bool fullscreen)
 {
+    qCInfo(lcKonveyor) << "konveyor: layout fullscreen for window" << id << "=" << fullscreen
+                       << "known =" << (d->workspaceOf(id) != nullptr);
+    if (fullscreen) {
+        d->dropDraggedWindow(id);
+    }
     if (Workspace *workspace = d->workspaceOf(id)) {
-        workspace->setFullscreen(id, fullscreen);
+        Tile *tile = workspace->tileFor(id);
+        const bool keepPresentation = !fullscreen && !workspace->isFloating(id) && !tile->returnsToFloating
+            && tile->window().requestedMode() == WindowMode::Fullscreen && d->isLockedToOutputSize(id);
+        workspace->setFullscreen(id, fullscreen || keepPresentation);
+        if (keepPresentation) {
+            tile->isWindowedFullscreenFallback = true;
+            tile->window().requestWindowedFullscreen(true);
+        } else if (!fullscreen && d->isLockedToOutputSize(id)) {
+            d->floatOverOutput(id);
+        }
         d->refresh();
     }
 }
 
 void Engine::toggleWindowFillWidth(WindowId id)
 {
+    qCInfo(lcKonveyor) << "konveyor: toggling fill width for window" << id;
     d->focusWindow(id);
     if (Workspace *workspace = d->workspaceOf(id)) {
-        workspace->toggleFillWidthFor(id);
+        workspace->toggleFillWidth(id);
         d->refresh();
     }
 }
 
 void Engine::setWindowUrgent(WindowId id, bool urgent)
 {
-    Workspace *workspace = d->workspaceOf(id);
-    if (!workspace) {
-        return;
+    if (Tile *tile = d->tileOf(id)) {
+        tile->window().setUrgent(urgent);
+        d->refresh();
     }
-    for (const TileRef &ref : workspace->renderedTilesMut(false)) {
-        if (ref.tile->id() == id) {
-            ref.tile->window().setUrgent(urgent);
-            break;
-        }
-    }
-    d->refresh();
 }
 
 }

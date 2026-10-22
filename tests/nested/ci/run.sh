@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/../../.."
+owner=$(stat -c %u:%g .)
+trap 'chown -R "$owner" .' EXIT
+
+pacman -Syu --noconfirm --needed git cmake ninja ccache clang llvm wayland-protocols typos nodejs npm shellcheck ruff dbus mesa xorg-xwayland \
+    qt6-wayland qt6-declarative python python-dbus python-gobject python-pillow python-xlib plasma-workspace plasma-desktop plasma5support \
+    plasma-keyboard breeze libkscreen kcmutils chromium
+sed -i "s/^#en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/" /etc/locale.gen
+locale-gen
+if [[ -z ${KONVEYOR_CI_TESTS:-} ]]; then
+    git clone https://github.com/mgehre/xunused.git /tmp/xunused
+    git -C /tmp/xunused checkout b81e0ef
+    if [[ ! -f /usr/include/clang/Driver/Options.h ]]; then
+        sed -i 's|#include "clang/Driver/Options.h"|#include "clang/Options/Options.h"|' /tmp/xunused/main.cpp
+    fi
+    if [[ ! -f /usr/include/clang/Index/USRGeneration.h ]]; then
+        sed -i 's|#include "clang/Index/USRGeneration.h"|#include "clang/UnifiedSymbolResolution/USRGeneration.h"|' /tmp/xunused/main.cpp
+    fi
+    cmake -S /tmp/xunused -B /tmp/xunused/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+    cmake --build /tmp/xunused/build
+    install -Dm755 /tmp/xunused/build/xunused /usr/local/bin/xunused
+fi
+git config --global --add safe.directory "$PWD"
+extras/packaging/dependencies.sh
+setcap -r "$(command -v kwin_wayland)"
+useradd -m tester
+chown -R tester: .
+install -d -m 700 -o tester /tmp/runtime-tester
+install -d -m 1777 /tmp/.X11-unix
+if [[ -n ${KONVEYOR_CI_TESTS:-} ]]; then
+    check_arguments=(--tests "$KONVEYOR_CI_TESTS")
+else
+    check_arguments=(--coverage)
+fi
+runuser -u tester -- env QT_QUICK_BACKEND=software XDG_RUNTIME_DIR=/tmp/runtime-tester HOME=/home/tester CCACHE_DIR="$PWD/.ccache" CCACHE_MAXSIZE=2G \
+    CMAKE_C_COMPILER_LAUNCHER=ccache CMAKE_CXX_COMPILER_LAUNCHER=ccache ./tools/check.sh --nested "${check_arguments[@]}"
+runuser -u tester -- env CCACHE_DIR="$PWD/.ccache" ccache --show-stats

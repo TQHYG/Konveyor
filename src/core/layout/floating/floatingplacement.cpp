@@ -69,8 +69,8 @@ void FloatingData::refreshAbsolutePos()
     QPointF logical = scaleByArea(workingArea, pos) - workingArea.topLeft();
     const double maxOffHor = std::max(0.0, size.width() - std::clamp(size.width() / 4.0, 10.0, 75.0));
     const double maxOffVer = std::max(0.0, size.height() - std::clamp(size.height() / 4.0, 10.0, 75.0));
-    logical.setX(std::clamp(logical.x(), -maxOffHor, workingArea.width() - size.width() + maxOffHor));
-    logical.setY(std::clamp(logical.y(), -maxOffVer, workingArea.height() - size.height() + maxOffVer));
+    logical.setX(std::clamp(logical.x(), -maxOffHor, std::max(-maxOffHor, workingArea.width() - size.width() + maxOffHor)));
+    logical.setY(std::clamp(logical.y(), -maxOffVer, std::max(-maxOffVer, workingArea.height() - size.height() + maxOffVer)));
     absolutePos = logical + workingArea.topLeft();
 }
 
@@ -106,7 +106,7 @@ QPointF FloatingLayer::keepInsideWorkArea(QPointF pos, QSizeF size) const
     return clampIntoArea(m_workingArea, QRectF(pos, size));
 }
 
-void FloatingLayer::prepareTileSize(Tile &tile) const
+void FloatingLayer::prepareTileSize(Tile &tile)
 {
     LayoutWindow &window = tile.window();
     QSize size = tile.savedFloatingSize.value_or(QSize());
@@ -118,6 +118,17 @@ void FloatingLayer::prepareTileSize(Tile &tile) const
     size.setWidth(clampToSizeLimitsAllowZero(size.width(), minSize.width(), maxSize.width()));
     size.setHeight(clampToSizeLimitsAllowZero(size.height(), minSize.height(), maxSize.height()));
     window.requestSizeUntilCommit(size, true);
+}
+
+void FloatingLayer::keepWithinSizeLimits(Tile &tile)
+{
+    LayoutWindow &window = tile.window();
+    const QSize current = roundedSize(tile.targetWindowSize());
+    const QSize clamped(clampToSizeLimits(current.width(), window.minSize().width(), window.maxSize().width()),
+        clampToSizeLimits(current.height(), window.minSize().height(), window.maxSize().height()));
+    if (clamped != current) {
+        window.requestSizeUntilCommit(clamped, true);
+    }
 }
 
 QSize FloatingLayer::initialWindowSize(const std::optional<Config::PresetSize> &width, const std::optional<Config::PresetSize> &height,

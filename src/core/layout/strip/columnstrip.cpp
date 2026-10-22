@@ -47,18 +47,19 @@ std::optional<std::optional<Config::PresetSize>> ColumnStrip::ruleWidthFor(const
 void ColumnStrip::applyDefaultColumnWidths()
 {
     m_defaultWidthsPending = false;
-    const std::optional<ColumnWidth> replaced
-        = m_replacedDefaultWidth ? std::optional(ColumnWidth::fromPreset(*m_replacedDefaultWidth)) : std::nullopt;
-    m_replacedDefaultWidth.reset();
+    const std::optional<Config::PresetSize> replaced = std::exchange(m_replacedDefaultWidth, std::nullopt);
     for (Column &column : m_columns) {
         const std::optional<std::optional<Config::PresetSize>> rule = ruleWidthFor(column);
         const std::optional<Config::PresetSize> preset = rule ? *rule : m_options->layout.defaultColumnWidth;
-        const bool customized = !rule && replaced && (column.fillsWidth || column.widthSetting != *replaced);
-        if (!preset || customized) {
+        const Tile &first = column.tiles.front();
+        const bool resizedByHand
+            = rule ? column.widthSetting != column.defaultedWidth : replaced && column.widthSetting != first.columnWidthFor(*replaced);
+        if (!preset || column.fillsWidth || resizedByHand) {
             continue;
         }
-        column.widthSetting = ColumnWidth::fromPreset(*preset);
-        column.fillsWidth = false;
+        column.widthSetting = first.columnWidthFor(*preset);
+        column.defaultedWidth = column.widthSetting;
+        column.presetWidthIndex = column.presetIndexOf(column.widthSetting);
         column.layoutTiles(false);
     }
 }
@@ -87,7 +88,24 @@ void ColumnStrip::refresh(bool isActive)
             window.setInteractiveResize(resizeData);
         }
     }
+    placeColumnsWithinPins();
     reconcileView();
+}
+
+void ColumnStrip::placeColumnsWithinPins()
+{
+    for (std::size_t moves = 0; moves < m_columns.size(); ++moves) {
+        std::optional<std::size_t> misplaced;
+        for (std::size_t idx = 0; idx < m_columns.size() && !misplaced; ++idx) {
+            if (allowedColumnIndex(m_columns[idx].pinnedPosition(), idx, idx) != idx) {
+                misplaced = idx;
+            }
+        }
+        if (!misplaced) {
+            return;
+        }
+        placeColumnWithinPins(*misplaced);
+    }
 }
 
 void ColumnStrip::tickAnimations()
@@ -242,14 +260,14 @@ bool ColumnStrip::animateOpening(WindowId id)
     return std::ranges::any_of(m_columns, [id](Column &column) { return column.animateOpening(id); });
 }
 
-std::optional<WindowId> ColumnStrip::windowUnder(QPointF pos) const
+std::optional<WindowHit> ColumnStrip::windowUnder(QPointF pos) const
 {
     for (const ColumnRef &ref : renderedColumns()) {
         const Column &column = *ref.column;
         if (column.isTabbed() && column.sizingMode() == WindowMode::Normal) {
             const QPointF colPos = roundPoint(ref.pos, m_area.scale);
             if (const auto idx = column.tabBar.hit(column.tabBarRect(), column.tiles.size(), m_area.scale, pos - colPos)) {
-                return column.tiles[*idx].id();
+                return WindowHit {column.tiles[*idx].id(), true};
             }
         }
         const std::vector<QPointF> offsets = column.tilePositions();
@@ -258,7 +276,7 @@ std::optional<WindowId> ColumnStrip::windowUnder(QPointF pos) const
             const bool visible = i == column.activeTileIndex || !column.isTabbed();
             const QPointF tilePos = roundPoint(ref.pos + offsets[i] + tile.animationOffset(), m_area.scale);
             if (visible && QRectF(tilePos, tile.outerSize()).contains(pos)) {
-                return tile.id();
+                return WindowHit {tile.id(), false};
             }
         }
     }

@@ -17,18 +17,23 @@
 #include "kwin/outputregistry.h"
 #include "kwin/windowapplier.h"
 #include "kwin/windowregistry.h"
+#include "plasma/kontrolpanelstacking.h"
 #include "plasma/plasmashellsync.h"
 #include "plugin/configmanager.h"
+#include "plugin/layouthandoff.h"
+#include "plugin/notifications.h"
 #include "plugin/windowmemorystore.h"
 
 #include "anim/clock.h"
 #include "config/loader.h"
 #include "ipc/model.h"
 #include "layout/gestures/gesturerouter.h"
+#include "tools/widgettool.h"
 
 #include <core/output.h>
 #include <effect/effecthandler.h>
 #include <input.h>
+#include <options.h>
 #include <wayland/seat.h>
 #include <wayland_server.h>
 #include <window.h>
@@ -76,6 +81,26 @@ inline QList<std::pair<KWin::ElectricBorder, bool Config::HotCorners::*>> hotCor
     };
 }
 
+inline bool cornerOn(const Config::HotCorners &corners, bool Config::HotCorners::*flag)
+{
+    return corners.enabled && corners.*flag;
+}
+
+inline const Config::HotCorners &hotCornersOn(const Config::Config &config, const QString &output)
+{
+    const auto entry = std::ranges::find_if(config.outputs, [&output](const Config::OutputConfig &candidate) {
+        return candidate.hotCorners && candidate.name.compare(output, Qt::CaseInsensitive) == 0;
+    });
+    return entry == config.outputs.end() ? config.gestures.hotCorners : *entry->hotCorners;
+}
+
+struct HeldQuickTiling
+{
+    Layout::WindowId window = 0;
+    bool tiling = false;
+    bool maximize = false;
+};
+
 struct KonveyorEffect::Private
 {
     Anim::Clock clock;
@@ -92,29 +117,41 @@ struct KonveyorEffect::Private
     DesktopSync desktops;
     ShortcutManager shortcuts;
     PlasmaShellSync plasmaShell;
+    KontrolPanelStacking kontrolPanelStacking;
     std::unique_ptr<SpillInputFilter> spillInput;
     std::unique_ptr<InputFilter> input;
+    std::unique_ptr<AxisFilter> axisInput;
+    std::unique_ptr<DragMotionFilter> dragMotion;
     std::unique_ptr<GestureFilter> gestureInput;
     std::unique_ptr<TouchpadContactReader> touchpadContacts;
     std::unique_ptr<DBusService> dbus;
+    QList<Layout::WorkspaceState> announcedWorkspaces;
     QTimer flushTimer;
     QTimer animationTimer;
     QTimer memorySaveTimer;
+    QTimer startupRulesTimer;
     WindowMemoryStore memoryStore;
+    LayoutHandoff handoff;
     bool animating = false;
     QSet<KWin::ElectricBorder> reservedCorners;
     double dragOrigin = 0;
-    QSizeF resizeOrigin;
+    QPointF resizeOrigin;
     quint64 bindCount = 0;
     QString lastBindKey;
     QString lastBindAction;
     std::optional<Layout::WindowId> focusRequest;
     QPointer<KWin::Window> followedWindow;
+    bool followAfterClose = false;
     std::optional<Layout::WindowId> titlebarDrag;
+    std::optional<Layout::WindowId> windowedMove;
+    std::optional<Layout::WindowId> cancelledMove;
+    std::optional<HeldQuickTiling> quickTiling;
+    std::optional<std::pair<Layout::WindowId, double>> draggedOpacity;
     std::optional<Layout::WindowId> touchLift;
+    QPointer<KWin::Window> touchMoveResize;
     std::optional<Layout::WindowId> touchMovePending;
     QHash<Layout::WindowId, QString> homeOutputs;
-    QHash<KWin::Window *, Layout::RestorePlacement> minimizedPlacements;
+    QHash<KWin::Window *, Layout::RestorePlacement> hiddenPlacements;
     QHash<Layout::WindowId, QHash<int, QPointer<KWin::Window>>> monitorOverlays;
     QHash<Layout::WindowId, QHash<int, QPointer<KWin::Window>>> monitorPanels;
     QSet<Layout::WindowId> placingMonitorOverlays;

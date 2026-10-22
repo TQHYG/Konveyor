@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+import shutil
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "harness"))
+
+SETUP = """export QML_IMPORT_PATH="{imports}"
+export KONVEYOR_KONTROL_PANEL_DIR="{panel}"
+kbuildsycoca6 >/dev/null 2>&1
+"""
+
+PROGRAM_DESKTOP = """[Desktop Entry]
+Type=Application
+Name=Kontrol Panel service
+Exec={program} {panel}
+NoDisplay=true
+X-KDE-Wayland-Interfaces=org_kde_plasma_window_management
+"""
+
+NORMAL_FOCUS_STEALING_PREVENTION = "[Windows]\nFocusStealingPreventionLevel=2"
+
+
+def stage(root):
+    from nested import REPO, build_dir, link_konveyor_imports
+
+    panel = root / "kontrol-panel"
+    shutil.copytree(REPO / "widgets" / "portals" / "kontrol-panel", panel)
+    shutil.copytree(REPO / "widgets" / "portals" / "shared" / "launcher", panel, dirs_exist_ok=True)
+    lib = panel / "lib"
+    lib.mkdir()
+    for pattern in ("*.qml", "*.js"):
+        for path in (REPO / "widgets" / "shared" / "common").glob(pattern):
+            shutil.copy(path, lib)
+    shutil.copy(REPO / "widgets" / "shared" / "MonitorOverlay.qml", lib)
+    shutil.copytree(REPO / "widgets" / "portals" / "shared" / "lib", lib, dirs_exist_ok=True)
+    shutil.copytree(HERE / "doubles", root / "imports")
+    return panel, link_konveyor_imports(root / "imports"), build_dir() / "bin" / "konveyor-kontrol-panel"
+
+
+def main():
+    from nested import run_runner
+
+    with tempfile.TemporaryDirectory(prefix="konveyor-kontrol-panel-") as temporary:
+        panel, imports, program = stage(Path(temporary))
+        files = {"data/applications/konveyor-kontrol-panel.desktop": PROGRAM_DESKTOP.format(program=program, panel=panel)}
+        return run_runner(HERE / "runners" / "kontrol_panel.py", clients=(), timeout=420, setup=SETUP.format(imports=imports, panel=panel),
+                          files=files, extra_kwinrc=NORMAL_FOCUS_STEALING_PREVENTION, permission_checks=True, global_shortcuts=True, output_count=2)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

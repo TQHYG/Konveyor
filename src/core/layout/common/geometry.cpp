@@ -4,6 +4,7 @@
 #include <array>
 #include <climits>
 #include <cmath>
+#include <utility>
 #include <variant>
 
 namespace Konveyor::Layout
@@ -74,6 +75,25 @@ QSizeF roundSize(QSizeF size, double scale)
     return {snapToPixels(scale, size.width()), snapToPixels(scale, size.height())};
 }
 
+namespace
+{
+
+constexpr double FloorTolerance = 1e-6;
+constexpr double MinimumWorkAreaShare = 0.25;
+
+std::pair<double, double> fitStruts(double start, double end, double length)
+{
+    const double allowed = length * (1.0 - MinimumWorkAreaShare);
+    const double taken = start + end;
+    if (taken <= allowed) {
+        return {start, end};
+    }
+    const double fit = allowed / taken;
+    return {start * fit, end * fit};
+}
+
+}
+
 int saturatingInt(double value)
 {
     if (std::isnan(value)) {
@@ -84,7 +104,7 @@ int saturatingInt(double value)
 
 int floorToInt(double value)
 {
-    return saturatingInt(std::floor(value));
+    return saturatingInt(std::floor(value + FloorTolerance));
 }
 
 int roundToInt(double value)
@@ -133,10 +153,12 @@ GeometryUpdate geometryUpdateFor(const QRectF &current, const std::optional<QSiz
 
 QRectF workAreaWithStruts(QRectF parentArea, double scale, const Config::Struts &struts)
 {
-    double x = parentArea.x() + struts.left;
-    double y = parentArea.y() + struts.top;
-    double w = std::max(0.0, parentArea.width() - struts.left - struts.right);
-    double h = std::max(0.0, parentArea.height() - struts.top - struts.bottom);
+    const auto [left, right] = fitStruts(struts.left, struts.right, parentArea.width());
+    const auto [top, bottom] = fitStruts(struts.top, struts.bottom, parentArea.height());
+    double x = parentArea.x() + left;
+    double y = parentArea.y() + top;
+    double w = std::max(0.0, parentArea.width() - left - right);
+    double h = std::max(0.0, parentArea.height() - top - bottom);
 
     const double locX = ceilToPixels(scale, x);
     const double locY = ceilToPixels(scale, y);

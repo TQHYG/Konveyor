@@ -1,12 +1,16 @@
 #pragma once
 
 #include <QDBusConnection>
+#include <QDBusServiceWatcher>
 #include <QObject>
 #include <QRegion>
 #include <QStringList>
+#include <QUrl>
+#include <QVariantMap>
 
 #include <Plasma/Theme>
 
+class QQuickItem;
 class QWindow;
 
 namespace Konveyor
@@ -30,6 +34,7 @@ public:
     Q_INVOKABLE void setOpen(bool open);
     Q_INVOKABLE void applyBackgroundEffects(QWindow *window, const QRegion &region);
     Q_INVOKABLE bool konveyorRunning() const;
+    Q_INVOKABLE QQuickItem *createForm(const QUrl &url, const QVariantMap &values, QQuickItem *parent) const;
 
 public Q_SLOTS:
     Q_SCRIPTABLE void Toggle();
@@ -46,9 +51,11 @@ Q_SIGNALS:
     void pinRequested(const QStringList &files);
     void configureRequested();
     void openChanged();
+    void konveyorStarted();
 
 private:
     Plasma::Theme m_theme;
+    QDBusServiceWatcher m_konveyor;
     bool m_open = false;
 };
 

@@ -102,19 +102,19 @@ ColumnLayout {
         }
         const group = activeGroup
         page.hiddenShown = items.count - group.count
-        if (page.sort !== "name") {
-            const order = []
-            for (let i = 0; i < group.count; ++i)
-                order.push({ rank: page.rankOf(group.get(i)), label: String(group.get(i).model.display || "").toLowerCase(), row: group.get(i).model.index })
-            const sorted = order.slice().sort((a, b) => (a.rank - b.rank) || a.label.localeCompare(b.label))
-            for (let target = 0; target < sorted.length; ++target) {
-                if (group.get(target).model.index === sorted[target].row)
-                    continue
-                for (let i = target + 1; i < group.count; ++i) {
-                    if (group.get(i).model.index === sorted[target].row) {
-                        group.move(i, target, 1)
-                        break
-                    }
+        const order = []
+        for (let i = 0; i < group.count; ++i) {
+            const entry = group.get(i)
+            order.push({ rank: page.sort === "name" ? entry.model.index : page.rankOf(entry), label: String(entry.model.display || "").toLowerCase(), row: entry.model.index })
+        }
+        const sorted = order.slice().sort((a, b) => (a.rank - b.rank) || a.label.localeCompare(b.label))
+        for (let target = 0; target < sorted.length; ++target) {
+            if (group.get(target).model.index === sorted[target].row)
+                continue
+            for (let i = target + 1; i < group.count; ++i) {
+                if (group.get(i).model.index === sorted[target].row) {
+                    group.move(i, target, 1)
+                    break
                 }
             }
         }
@@ -163,7 +163,6 @@ ColumnLayout {
         delegate: Tile {
             id: appTile
             required property var model
-            required property int index
             readonly property var view: GridView.view
             readonly property string favoriteId: model.favoriteId || ""
             sidebarEntry: launcherData.sidebarEntryFor(favoriteId, "", model.display)
@@ -181,10 +180,10 @@ ColumnLayout {
             function openMenu() {
                 launcher.openMenu(launcher.kickerEntries(page.categoryModel, model.index, model.hasActionList ? model.actionList : [], favoriteId), appTile)
             }
-            onHovered: launcher.select(view, index)
+            onHovered: launcher.select(view, appTile.DelegateModel.shownIndex)
             onClicked: activate()
             onRightClicked: {
-                launcher.select(view, index)
+                launcher.select(view, appTile.DelegateModel.shownIndex)
                 openMenu()
             }
         }
@@ -203,7 +202,6 @@ ColumnLayout {
         delegate: RowTile {
             id: appRow
             required property var model
-            required property int index
             readonly property var view: GridView.view
             readonly property string favoriteId: model.favoriteId || ""
             readonly property var gameEntry: launcherData.gameForApp(favoriteId)
@@ -223,10 +221,10 @@ ColumnLayout {
             function openMenu() {
                 launcher.openMenu(launcher.kickerEntries(page.categoryModel, model.index, model.hasActionList ? model.actionList : [], favoriteId), appRow)
             }
-            onHovered: launcher.select(view, index)
+            onHovered: launcher.select(view, appRow.DelegateModel.shownIndex)
             onClicked: activate()
             onRightClicked: {
-                launcher.select(view, index)
+                launcher.select(view, appRow.DelegateModel.shownIndex)
                 openMenu()
             }
         }
@@ -367,40 +365,6 @@ ColumnLayout {
             }
         }
 
-        ColumnLayout {
-            visible: page.letters.length > 4
-            Layout.fillHeight: true
-            Layout.fillWidth: false
-            Layout.preferredWidth: Kirigami.Units.gridUnit * 1.4
-            spacing: 0
-            Repeater {
-                model: page.letters
-                MouseArea {
-                    id: letter
-                    required property var modelData
-                    Layout.fillWidth: true
-                    Layout.fillHeight: true
-                    Layout.maximumHeight: Kirigami.Units.gridUnit * 1.3
-                    hoverEnabled: modelData.row >= 0
-                    enabled: modelData.row >= 0
-                    onClicked: page.jump(modelData.row)
-                    Rectangle {
-                        anchors.centerIn: parent
-                        width: Math.min(parent.width, parent.height)
-                        height: width
-                        radius: width / 2
-                        color: letter.containsMouse ? launcher.selectedFill : "transparent"
-                    }
-                    PlasmaComponents.Label {
-                        anchors.centerIn: parent
-                        text: letter.modelData.key
-                        font.pointSize: Kirigami.Theme.smallFont.pointSize
-                        font.weight: Font.DemiBold
-                        opacity: letter.modelData.row < 0 ? 0.18 : letter.containsMouse ? 1 : 0.55
-                    }
-                }
-            }
-            Item { Layout.fillHeight: true }
-        }
+        LetterIndex {}
     }
 }

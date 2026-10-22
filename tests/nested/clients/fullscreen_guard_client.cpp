@@ -1,14 +1,9 @@
-#include "xdg-shell-client-protocol.h"
+#include "xdgclient.h"
 
 #include <poll.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#include <wayland-client.h>
 
-#include <algorithm>
-#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
-#include <cstring>
 
 namespace
 {
@@ -16,19 +11,19 @@ namespace
 enum class Request
 {
     Unfullscreen,
-    Minimize
+    Minimize,
+    Protocol
 };
 
 struct Client
 {
     wl_display *display = nullptr;
-    wl_compositor *compositor = nullptr;
-    wl_shm *shm = nullptr;
-    xdg_wm_base *shell = nullptr;
+    XdgGlobals globals;
     wl_surface *surface = nullptr;
     xdg_surface *xdgSurface = nullptr;
     xdg_toplevel *toplevel = nullptr;
     wl_buffer *buffer = nullptr;
+    wl_output *fullscreenOutput = nullptr;
     Request request = Request::Unfullscreen;
     bool mapped = false;
     bool active = false;
@@ -39,55 +34,24 @@ struct Client
     bool closed = false;
     bool windowedMinimizeSent = false;
     int phaseRequests = 0;
+    int width = 600;
+    int height = 400;
+    int bufferWidth = 0;
+    int bufferHeight = 0;
 };
 
-void registryGlobal(void *data, wl_registry *registry, uint32_t name, const char *interface, uint32_t version)
+void bindOutput(void *data, wl_registry *registry, uint32_t name, const char *interface, uint32_t)
 {
     auto *client = static_cast<Client *>(data);
-    if (std::strcmp(interface, wl_compositor_interface.name) == 0) {
-        client->compositor
-            = static_cast<wl_compositor *>(wl_registry_bind(registry, name, &wl_compositor_interface, std::min(version, 4u)));
-    } else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
-        client->shm = static_cast<wl_shm *>(wl_registry_bind(registry, name, &wl_shm_interface, 1));
-    } else if (std::strcmp(interface, xdg_wm_base_interface.name) == 0) {
-        client->shell = static_cast<xdg_wm_base *>(wl_registry_bind(registry, name, &xdg_wm_base_interface, std::min(version, 6u)));
+    if (std::strcmp(interface, wl_output_interface.name) == 0) {
+        if (client->fullscreenOutput) {
+            wl_output_destroy(client->fullscreenOutput);
+        }
+        client->fullscreenOutput = static_cast<wl_output *>(wl_registry_bind(registry, name, &wl_output_interface, 1));
     }
 }
 
-void registryRemove(void *, wl_registry *, uint32_t) { }
-
-constexpr wl_registry_listener registryListener {registryGlobal, registryRemove};
-
-void shellPing(void *, xdg_wm_base *shell, uint32_t serial)
-{
-    xdg_wm_base_pong(shell, serial);
-}
-
-constexpr xdg_wm_base_listener shellListener {shellPing};
-
-wl_buffer *makeBuffer(Client *client)
-{
-    constexpr int width = 600;
-    constexpr int height = 400;
-    constexpr int stride = width * 4;
-    constexpr int size = stride * height;
-    const int descriptor = memfd_create("konveyor-fullscreen-guard", MFD_CLOEXEC);
-    if (descriptor < 0 || ftruncate(descriptor, size) < 0) {
-        return nullptr;
-    }
-    void *mapping = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, descriptor, 0);
-    if (mapping == MAP_FAILED) {
-        close(descriptor);
-        return nullptr;
-    }
-    std::fill_n(static_cast<uint32_t *>(mapping), width * height, 0xffb03030u);
-    munmap(mapping, size);
-    wl_shm_pool *pool = wl_shm_create_pool(client->shm, descriptor, size);
-    wl_buffer *buffer = wl_shm_pool_create_buffer(pool, 0, width, height, stride, WL_SHM_FORMAT_XRGB8888);
-    wl_shm_pool_destroy(pool);
-    close(descriptor);
-    return buffer;
-}
+constexpr wl_registry_listener outputListener {bindOutput, ignoreGlobalRemoval};
 
 void requestState(Client *client)
 {
@@ -104,8 +68,24 @@ void surfaceConfigure(void *data, xdg_surface *surface, uint32_t serial)
 {
     auto *client = static_cast<Client *>(data);
     xdg_surface_ack_configure(surface, serial);
-    if (!client->mapped) {
-        client->buffer = makeBuffer(client);
+    if (client->request == Request::Protocol) {
+        std::printf("configure:%u:%s:%dx%d\n", serial, client->fullscreen ? "fullscreen" : "normal", client->width, client->height);
+        std::fflush(stdout);
+        const int width = client->width > 0 ? client->width : 600;
+        const int height = client->height > 0 ? client->height : 400;
+        if (width != client->bufferWidth || height != client->bufferHeight) {
+            if (client->buffer) {
+                wl_buffer_destroy(client->buffer);
+            }
+            client->buffer = makeSolidBuffer(client->globals.shm, width, height, 0xffb03030u);
+            client->bufferWidth = width;
+            client->bufferHeight = height;
+        }
+        wl_surface_attach(client->surface, client->buffer, 0, 0);
+        wl_surface_damage_buffer(client->surface, 0, 0, width, height);
+        client->mapped = true;
+    } else if (!client->mapped) {
+        client->buffer = makeSolidBuffer(client->globals.shm, 600, 400, 0xffb03030u);
         wl_surface_attach(client->surface, client->buffer, 0, 0);
         wl_surface_damage_buffer(client->surface, 0, 0, 600, 400);
         xdg_toplevel_set_fullscreen(client->toplevel, nullptr);
@@ -121,9 +101,11 @@ void surfaceConfigure(void *data, xdg_surface *surface, uint32_t serial)
 
 constexpr xdg_surface_listener surfaceListener {surfaceConfigure};
 
-void toplevelConfigure(void *data, xdg_toplevel *, int32_t, int32_t, wl_array *states)
+void toplevelConfigure(void *data, xdg_toplevel *, int32_t width, int32_t height, wl_array *states)
 {
     auto *client = static_cast<Client *>(data);
+    client->width = width;
+    client->height = height;
     client->fullscreen = false;
     client->active = false;
     const auto *state = static_cast<const uint32_t *>(states->data);
@@ -160,6 +142,26 @@ void toplevelCapabilities(void *, xdg_toplevel *, wl_array *) { }
 
 constexpr xdg_toplevel_listener toplevelListener {toplevelConfigure, toplevelClose, toplevelBounds, toplevelCapabilities};
 
+void requestProtocolState(Client *client)
+{
+    char command[32];
+    if (!std::fgets(command, sizeof(command), stdin)) {
+        client->closed = true;
+        return;
+    }
+    if (std::strcmp(command, "fullscreen\n") == 0) {
+        xdg_toplevel_set_fullscreen(client->toplevel, nullptr);
+    } else if (std::strcmp(command, "fullscreen-output\n") == 0) {
+        xdg_toplevel_set_fullscreen(client->toplevel, client->fullscreenOutput);
+    } else if (std::strcmp(command, "unset\n") == 0) {
+        xdg_toplevel_unset_fullscreen(client->toplevel);
+    } else if (std::strcmp(command, "minimize\n") == 0) {
+        xdg_toplevel_set_minimized(client->toplevel);
+    }
+    wl_surface_commit(client->surface);
+    wl_display_flush(client->display);
+}
+
 bool dispatch(Client *client)
 {
     while (wl_display_prepare_read(client->display) != 0) {
@@ -168,10 +170,11 @@ bool dispatch(Client *client)
         }
     }
     wl_display_flush(client->display);
-    pollfd descriptor {wl_display_get_fd(client->display), POLLIN, 0};
-    const int timeout = client->focusPhase > 0 && client->phaseRequests < 1 ? 2 : 1000;
-    const int ready = poll(&descriptor, 1, timeout);
-    if (ready > 0) {
+    pollfd descriptors[] {{wl_display_get_fd(client->display), POLLIN, 0}, {STDIN_FILENO, POLLIN, 0}};
+    const bool awaitingRequest = client->request != Request::Protocol && client->focusPhase > 0 && client->phaseRequests < 1;
+    const int timeout = awaitingRequest ? 2 : 1000;
+    const int ready = poll(descriptors, client->request == Request::Protocol ? 2 : 1, timeout);
+    if (ready > 0 && (descriptors[0].revents & POLLIN)) {
         if (wl_display_read_events(client->display) < 0) {
             return false;
         }
@@ -181,7 +184,10 @@ bool dispatch(Client *client)
     if (wl_display_dispatch_pending(client->display) < 0) {
         return false;
     }
-    if (client->focusPhase > 0 && client->phaseRequests < 1) {
+    if (client->request == Request::Protocol && (descriptors[1].revents & POLLIN)) {
+        requestProtocolState(client);
+    }
+    if (awaitingRequest) {
         requestState(client);
     }
     return true;
@@ -195,20 +201,25 @@ int main(int argc, char **argv)
         return 2;
     }
     Client client;
-    client.request = std::strcmp(argv[2], "minimize") == 0 ? Request::Minimize : Request::Unfullscreen;
+    if (std::strcmp(argv[2], "protocol") == 0) {
+        client.request = Request::Protocol;
+    } else if (std::strcmp(argv[2], "minimize") == 0) {
+        client.request = Request::Minimize;
+    }
     client.display = wl_display_connect(nullptr);
     if (!client.display) {
         return 3;
     }
-    wl_registry *registry = wl_display_get_registry(client.display);
-    wl_registry_add_listener(registry, &registryListener, &client);
-    wl_display_roundtrip(client.display);
-    if (!client.compositor || !client.shm || !client.shell) {
+    if (!bindGlobals(client.display, client.globals)) {
         return 4;
     }
-    xdg_wm_base_add_listener(client.shell, &shellListener, &client);
-    client.surface = wl_compositor_create_surface(client.compositor);
-    client.xdgSurface = xdg_wm_base_get_xdg_surface(client.shell, client.surface);
+    if (client.request == Request::Protocol) {
+        wl_registry *registry = wl_display_get_registry(client.display);
+        wl_registry_add_listener(registry, &outputListener, &client);
+        wl_display_roundtrip(client.display);
+    }
+    client.surface = wl_compositor_create_surface(client.globals.compositor);
+    client.xdgSurface = xdg_wm_base_get_xdg_surface(client.globals.shell, client.surface);
     xdg_surface_add_listener(client.xdgSurface, &surfaceListener, &client);
     client.toplevel = xdg_surface_get_toplevel(client.xdgSurface);
     xdg_toplevel_add_listener(client.toplevel, &toplevelListener, &client);

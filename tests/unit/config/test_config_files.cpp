@@ -34,7 +34,8 @@ void TestConfigFiles::loadsRepositoryDefaultConfig()
 
     const auto result = loadFile(path);
     QVERIFY(result.has_value());
-    QCOMPARE(result->config.gestures.titlebarDrag, TitlebarDrag::ScrollView);
+    QCOMPARE(result->config.gestures.titlebarDrag, TitlebarDrag::MoveWindow);
+    QCOMPARE(result->config.gestures.resizeTiledWindows, true);
     QCOMPARE(result->config.gestures.hotCorners.enabled, false);
     QCOMPARE(result->config.layout.focusRing.active.source, ColorSource::SystemAccent);
     QCOMPARE(result->config.layout.border.enabled, false);
@@ -42,13 +43,13 @@ void TestConfigFiles::loadsRepositoryDefaultConfig()
     QCOMPARE(result->config.monitorProfiles.size(), 2);
     const MonitorProfile &portrait = result->config.monitorProfiles.at(0);
     QCOMPARE(portrait.matches.value(0).aspectRatioBelow, std::optional(1.0));
-    QCOMPARE(std::get<Proportion>(*portrait.layout->defaultColumnWidth).value, 1.0);
-    QCOMPARE(portrait.layout->newWindowPlacement, NewWindowPlacement::Stack);
-    QCOMPARE(portrait.layout->maxRowsPerColumn, 2);
+    QCOMPARE(std::get<Proportion>(**portrait.layout->defaultColumnWidth).value, 1.0);
+    QCOMPARE(portrait.layout->newWindowPlacement, std::optional(NewWindowPlacement::Stack));
+    QCOMPARE(portrait.layout->maxRowsPerColumn, std::optional(2));
     QCOMPARE(result->config.layout.newWindowPlacement, NewWindowPlacement::Column);
     const MonitorProfile &ultrawide = result->config.monitorProfiles.at(1);
     QCOMPARE(ultrawide.matches.value(0).aspectRatioAbove, std::optional(2.0));
-    QCOMPARE(std::get<Proportion>(*ultrawide.layout->defaultColumnWidth).value, 0.5);
+    QCOMPARE(ultrawide.layout->defaultColumnWidth, std::nullopt);
     QCOMPARE(std::get<Proportion>(*result->config.layout.defaultColumnWidth).value, 0.5);
     QCOMPARE(result->config.layout.rememberWindowSizes, false);
     QCOMPARE(result->config.layout.rememberWindowPositions, false);

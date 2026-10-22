@@ -14,6 +14,14 @@ namespace Konveyor::Layout
 
 QString monitorProfileName(const Config::Config &config, const OutputArea &area);
 
+struct DragOrigin
+{
+    RestorePlacement placement;
+    QString output;
+    std::size_t workspaceIndex = 0;
+    WindowMode mode = WindowMode::Normal;
+};
+
 struct WindowDrag
 {
     bool moving = false;
@@ -27,6 +35,7 @@ struct WindowDrag
     ColumnWidth width;
     bool fillsWidth = false;
     bool isFloating = false;
+    DragOrigin origin;
 
     QPointF renderLocation() const;
 };
@@ -77,16 +86,23 @@ struct Engine::Private
     std::optional<WindowId> announcedFocus;
     bool layoutFocused = true;
     std::optional<WindowDrag> windowDrag;
-    QString viewGestureOutput;
+    std::optional<std::pair<QString, QPointF>> dataDragPointer;
+    bool edgeScrolling = false;
+    std::optional<WorkspaceId> viewGestureWorkspace;
     QString switchGestureOutput;
     std::optional<WindowId> resizeWindow;
     bool overviewOpen = false;
+    bool nativeDesktopPresentation = false;
     Anim::Duration startupTime;
+    bool rulesAtStartup = true;
     WindowMemory windowMemory;
 
     bool atStartup() const;
     OutputArea areaFor(const OutputInfo &info) const;
     QPointF originOf(const QString &outputName) const;
+    bool usesWorkspaceMotion(const Monitor &monitor) const;
+    std::vector<double> workspaceRenderOffsets(const Monitor &monitor) const;
+    void setOverviewState(bool open);
 
     Monitor *activeMonitor();
     Workspace *activeWorkspace();
@@ -94,14 +110,14 @@ struct Engine::Private
     std::optional<std::size_t> monitorIndexByName(const QString &name) const;
     Monitor *monitorOf(WindowId id);
     Workspace *workspaceOf(WindowId id);
+    Tile *tileOf(WindowId id);
     Workspace *workspaceById(WorkspaceId id);
     std::optional<std::size_t> monitorIndexOf(WindowId id) const;
     std::vector<Workspace *> allWorkspaces();
     void rememberWindows();
-    void applyRememberedSize(NewWindowPlan &plan, const QString &appId) const;
+    void applyRememberedSize(NewWindowPlan &plan, const QString &appId, const Config::Layout &layout) const;
     bool appHasWindow(const QString &appId) const;
     bool placeInAppGroup(Tile &tile, const NewWindowPlan &plan, Workspace &workspace, MonitorAddRequest &request);
-    const Config::Layout &layoutForMonitor(std::size_t monitorIndex) const;
     struct AppStackRequest
     {
         bool activate = false;
@@ -116,11 +132,21 @@ struct Engine::Private
     Workspace *workspaceForTarget(std::optional<WindowId> requested);
 
     void refresh();
+    void refreshWorkspaces();
     bool focusWindow(WindowId id);
+    void takeLayoutFocus();
     void updateFocus();
-    void resolveRules();
+    bool resolveRules();
     bool resolveWorkspaceRules(Workspace &workspace, std::vector<WindowId> &changed);
+    std::size_t namedWorkspaceSlot(const std::vector<Workspace> &workspaces, const QString &name) const;
     void ensureNamedWorkspaces();
+    void applyNamedWorkspaceLayouts();
+    void applyNamedWorkspaceHomes(const QList<Config::NamedWorkspace> &previous);
+    std::optional<std::size_t> homeMonitorOf(const Workspace &workspace) const;
+    void sendHome(std::vector<Workspace> workspaces);
+    void moveHome(WorkspaceId id);
+    void followWindowsOnAllDesktops();
+    void forgetRemovedWorkspaceNames(const QList<Config::NamedWorkspace> &previous);
     void applyOptions();
 
     NewWindowPlan planNewWindow(const WindowProperties &properties, const QString &preferredOutput, ActivationPolicy policy) const;
@@ -128,24 +154,43 @@ struct Engine::Private
         const NewWindowPlan &plan, const WindowProperties &properties, const QString &preferredOutput) const;
     Workspace *workspaceForNewWindow(NewWindowPlan &plan);
     Workspace *workspaceForPlacement(const NewWindowPlan &plan);
-    void finishPlacement(WindowId id, const NewWindowPlan &plan);
+    void restorePresentation(Workspace &workspace, WindowId id, const RestorePlacement &restore);
+    void finishPlacement(WindowId id, const NewWindowPlan &plan, const std::optional<RestorePlacement> &restore);
     void placeNewWindow(
         WindowId id, const WindowProperties &properties, const NewWindowPlan &plan, const std::optional<RestorePlacement> &restore);
     bool placeRestored(Tile &tile, const NewWindowPlan &plan, const RestorePlacement &restore, MonitorAddRequest &request);
+    QRectF floatingFrameOf(const Workspace &workspace, WindowId id) const;
+    void restoreFloatingFrame(WindowId id, const QRectF &frame);
+    void setFloatingFrame(WindowId id, const QRectF &frame);
+    bool isLockedToOutputSize(WindowId id);
+    void floatOverOutput(WindowId id);
 
     std::optional<std::size_t> monitorInDirection(const QString &direction) const;
 
-    void moveWindowToMonitor(std::optional<WindowId> window, std::size_t monitorIndex, bool activate);
-    void moveColumnToMonitor(std::size_t monitorIndex, bool activate);
+    void moveWindowToMonitor(
+        std::optional<WindowId> window, std::size_t monitorIndex, bool activate, std::optional<std::size_t> workspaceIndex);
+    void moveColumnToMonitor(std::size_t monitorIndex, bool activate, std::optional<std::size_t> workspaceIndex);
     void moveWorkspaceToMonitor(std::size_t monitorIndex);
 
     void appendWorkspaceStates(QList<WindowState> &states, const Workspace &workspace, const WorkspaceRenderContext &context) const;
     std::optional<QRectF> dropHintRect(const Monitor &monitor) const;
     void appendMovedWindowState(QList<WindowState> &states) const;
+    QString checkWindowPlacement() const;
+    QString checkViews() const;
 
     void beginInteractiveMoving(const QString &output);
+    void stopEdgeScroll();
+    void finishResize();
+    void edgeScrollAt(Monitor &monitor, QPointF local);
+    void scrollDragEdges();
+    void continueEdgeScroll();
+    void moveDragToActiveOutput();
     void updateDropHint();
+    void setDragFloating(bool floating);
+    void placeDragPointerOnFloatingTile();
     void interactiveMoveFinish();
+    void dropDraggedWindow(std::optional<WindowId> window);
+    void returnDraggedTile(WindowDrag &move);
     void dropInteractiveTile(Monitor &monitor, const Monitor::InsertTarget &insertTarget);
 };
 

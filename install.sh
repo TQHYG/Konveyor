@@ -14,9 +14,9 @@ WIDGETS=true
 AUR=false
 [[ ${KONVEYOR_AUR:-} == @(1|true|yes) ]] && AUR=true
 MODE=install
-OPTIONS_FILE="$HOME/.local/state/konveyor/install-options"
-UPDATE_PENDING="$HOME/.local/state/konveyor/update-pending"
+OPTIONS_FILE="$KONVEYOR_OPTIONS_FILE"
 WIDGETS_RUNTIME_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/konveyor/widgets"
+UPDATE_PENDING="$HOME/.local/state/konveyor/update-pending"
 
 usage() {
     cat <<EOF
@@ -28,7 +28,7 @@ updates rebuild it. Run it again at any time to update.
 
   --skip-deps   Do not install build and widget dependencies with the system package manager
   --no-pull     Do not update the source checkout with git pull
-  --no-widgets  Install only the window manager, without the Konveyor widgets
+  --no-widgets  Install only the window manager; removes the Konveyor widgets if installed
   --aur         Installed by a package (also KONVEYOR_AUR=true); the package manager handles
                 updates, so no update hook is registered
 EOF
@@ -44,6 +44,7 @@ parse_arguments() {
         --system-update) MODE=system-update ;;
         --finish-update) MODE=finish-update ;;
         --login-update) MODE=login-update ;;
+        --login-rebuild) MODE=login-rebuild ;;
         -h | --help) usage; exit 0 ;;
         *) die "unknown option: $argument" ;;
         esac
@@ -51,6 +52,7 @@ parse_arguments() {
 }
 
 update_checkout() {
+    git -C "$SOURCE_DIR" rev-parse --git-dir >/dev/null 2>&1 || return 0
     if ! $SKIP_PULL && git -C "$SOURCE_DIR" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
         say "Updating source checkout"
         git -C "$SOURCE_DIR" pull --ff-only
@@ -169,7 +171,7 @@ add_session_path() {
 }
 
 configure_session_paths() {
-    $KONVEYOR_ATOMIC || return 0
+    [[ $KONVEYOR_PREFIX != /usr ]] || return 0
     local plugins qml
     plugins="${KONVEYOR_PLUGIN_DIR%/kwin/effects/plugins}"
     qml=$(manifest_entry "$KONVEYOR_STATE_DIR/install_manifest.txt" '/org/kde/konveyor/settings/qmldir$')
@@ -200,12 +202,16 @@ activate() {
     fi
 }
 
+read_install_options() {
+    if grep -qx "widgets=false" "$1" 2>/dev/null; then
+        WIDGETS=false
+    fi
+}
+
 finish_update() {
     KONVEYOR_PLUGIN_DIR=$(konveyor_plugin_dir)
     PLUGIN_ID=$(<"$KONVEYOR_STATE_DIR/plugin-id")
-    if grep -qx "widgets=false" "$OPTIONS_FILE" 2>/dev/null; then
-        WIDGETS=false
-    fi
+    read_install_options "$OPTIONS_FILE"
     if $WIDGETS; then
         TELEMETRY_PLUGIN_ID=$(<"$KONVEYOR_STATE_DIR/telemetry-plugin-id")
     fi
@@ -213,9 +219,7 @@ finish_update() {
     configure_session_paths
     activate
     if $WIDGETS; then
-        local widget_installer="$WIDGETS_RUNTIME_DIR/install.sh"
-        [[ -x $widget_installer ]] || widget_installer="$SOURCE_DIR/widgets/install.sh"
-        KONVEYOR_WIDGETS_SOURCE="$SOURCE_DIR/widgets" "$widget_installer" --no-restart
+        PATH="$KONVEYOR_PREFIX/bin:$PATH" "$SOURCE_DIR/widgets/install.sh" --no-restart
     fi
     rm -f "$UPDATE_PENDING"
     notify_owner "Konveyor updated" "Konveyor $(git -C "$SOURCE_DIR" describe --always --tags 2>/dev/null) is installed. Restart Plasma or log out and back in to load the updated widgets."
@@ -224,6 +228,9 @@ finish_update() {
 system_update() {
     [[ $EUID -eq 0 && -n ${KONVEYOR_OWNER:-} ]] || die "--system-update runs from the system update hook"
     SYSTEM_UPDATE_ROOT=true
+    local owner_state
+    owner_state="$(getent passwd "$KONVEYOR_OWNER" | cut -d: -f6)/.local/state/konveyor"
+    read_install_options "$owner_state/install-options"
     source_git submodule update --init --recursive --quiet
     build
     install_files
@@ -235,12 +242,18 @@ system_update() {
         as_owner env KONVEYOR_SOURCE_DIR="$SOURCE_DIR" KONVEYOR_INSTALL_SUPPORT="$KONVEYOR_UPDATER_DIR" \
             "$KONVEYOR_UPDATER_DIR/install" --finish-update
     else
-        local pending
-        pending="$(getent passwd "$KONVEYOR_OWNER" | cut -d: -f6)/.local/state/konveyor/update-pending"
-        as_owner mkdir -p "$(dirname "$pending")"
-        as_owner touch "$pending"
+        as_owner mkdir -p "$owner_state"
+        as_owner touch "$owner_state/update-pending"
         say "Konveyor was built; its session steps run at your next login"
     fi
+}
+
+remove_widgets() {
+    [[ -d $WIDGETS_RUNTIME_DIR ]] || return 0
+    say "Removing the Konveyor widgets because of --no-widgets"
+    local widget_uninstaller="$WIDGETS_RUNTIME_DIR/uninstall.sh"
+    [[ -x $widget_uninstaller ]] || widget_uninstaller="$SOURCE_DIR/widgets/uninstall.sh"
+    "$widget_uninstaller"
 }
 
 main() {
@@ -250,6 +263,7 @@ main() {
     system-update) system_update; return ;;
     finish-update) finish_update; return ;;
     login-update) login_update; return ;;
+    login-rebuild) login_rebuild; return ;;
     esac
     [[ $EUID -ne 0 ]] || die "run install.sh as your normal user; it asks for sudo when needed"
     update_checkout
@@ -265,14 +279,15 @@ main() {
     configure_session_paths
     activate
     mkdir -p "$(dirname "$OPTIONS_FILE")"
-    printf 'widgets=%s\n' "$WIDGETS" >"$OPTIONS_FILE"
+    printf 'widgets=%s\nprefix=%s\n' "$WIDGETS" "$KONVEYOR_PREFIX" >"$OPTIONS_FILE"
     if $WIDGETS; then
-        "$SOURCE_DIR/widgets/install.sh"
+        PATH="$KONVEYOR_PREFIX/bin:$PATH" "$SOURCE_DIR/widgets/install.sh"
         say "Settings: press Meta+K and open Settings in the Kontrol Panel, or open System Settings > Window Management > Konveyor"
     else
+        remove_widgets
         say "Settings: open System Settings > Window Management > Konveyor"
     fi
     say "Config file: ~/.config/konveyor/config.kdl (created on first start)"
 }
 
-main "$@"
+[[ ${BASH_SOURCE[0]} != "$0" ]] || main "$@"

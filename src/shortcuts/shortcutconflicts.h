@@ -21,7 +21,8 @@ class ShortcutConflicts
 public:
     static QList<ReleasedShortcut> takeOver(const QList<QKeySequence> &wanted, const QString &ownComponent);
     static QList<ReleasedShortcut> releaseSuperseded();
-    static void restore(const QList<ReleasedShortcut> &released);
+    static QList<ReleasedShortcut> restore(const QList<ReleasedShortcut> &released);
+    static QList<ReleasedShortcut> restoreUnwanted(const QList<ReleasedShortcut> &released, const QList<QKeySequence> &wanted);
 
     static QList<ReleasedShortcut> load();
     static void save(const QList<ReleasedShortcut> &released);

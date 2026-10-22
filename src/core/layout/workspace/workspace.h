@@ -62,17 +62,21 @@ public:
     bool hasWindow(WindowId id) const;
     bool isUrgent() const;
 
-    const QString &homeOutput() const { return m_homeOutput; }
-    void setHomeOutput(const QString &outputId) { m_homeOutput = outputId; }
+    int homeAffinity(const OutputArea &area) const;
+    bool homeUnplugged() const { return m_homeUnplugged; }
+    void markHomeUnplugged() { m_homeUnplugged = true; }
+    void makeHome(const OutputArea &area);
+    void setConfiguredHome(const QString &reference);
     const QString &outputName() const { return m_area.outputName; }
     bool hasOutput() const { return !m_area.outputName.isEmpty(); }
     const OutputArea &area() const { return m_area; }
     void setOutput(const OutputArea &area);
+    void clearWindowedFullscreenFallbacks();
     void clearOutput();
 
     void updateConfig(OptionsPtr globalOptions);
     const OptionsPtr &options() const { return m_options; }
-    const std::optional<Config::Layout> &layoutOverride() const { return m_layoutOverride; }
+    void setLayoutOverride(std::optional<Config::LayoutPart> layoutOverride);
     const Anim::Clock &clock() const { return m_clock; }
 
     void tickAnimations();
@@ -133,7 +137,7 @@ public:
     bool moveRight();
     void moveColumnToFirst();
     void moveColumnToLast();
-    void moveColumnToIndex(std::size_t index);
+    void moveColumnToIndex(std::size_t index, std::optional<WindowId> window);
     bool moveDown();
     bool moveUp();
     void consumeOrExpelWindowLeft(std::optional<WindowId> window);
@@ -141,20 +145,18 @@ public:
     void consumeIntoColumn();
     void expelFromColumn();
     void swapWindowInDirection(ScrollDirection direction);
-    void toggleColumnTabbedDisplay();
-    void setColumnDisplay(Config::ColumnDisplay display);
+    void toggleColumnTabbedDisplay(std::optional<WindowId> window);
+    void setColumnDisplay(Config::ColumnDisplay display, std::optional<WindowId> window);
+    std::optional<std::size_t> tiledColumnIndex(WindowId window) const;
     void centerColumn();
     void centerWindow(std::optional<WindowId> window);
     void centerVisibleColumns();
 
-    void toggleWidth(bool forwards, bool fromNative = false);
-    void toggleFillWidth();
-    void toggleFillWidthFor(WindowId window);
-    void setColumnWidth(SizeChange change);
+    void toggleFillWidth(std::optional<WindowId> window);
     void setWindowWidth(std::optional<WindowId> window, SizeChange change);
     void setWindowHeight(std::optional<WindowId> window, SizeChange change);
     void resetWindowHeight(std::optional<WindowId> window);
-    void toggleWindowWidth(std::optional<WindowId> window, bool forwards);
+    void toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative);
     void toggleWindowHeight(std::optional<WindowId> window, bool forwards);
     void expandColumnToAvailableWidth();
 
@@ -173,7 +175,7 @@ public:
     std::vector<ConstTileRef> tilesWithRenderPositions() const;
     std::vector<ConstTileRef> placedTiles(bool animated) const;
     std::vector<TileRef> renderedTilesMut(bool round);
-    std::optional<WindowId> windowUnder(QPointF pos) const;
+    std::optional<WindowHit> windowUnder(QPointF pos) const;
     std::optional<QPointF> tileRenderPosition(WindowId id) const;
     DropSlot tiledDropSlotAt(QPointF pos, std::optional<Config::ColumnPosition> movingPin) const;
     std::optional<QRectF> dropSlotRect(DropSlot position) const;
@@ -213,12 +215,16 @@ private:
     void rememberRestoreToFloating(WindowId window, bool wasNormal, bool restore);
     void storeFloatingPosition(std::optional<WindowId> window, PositionChange x, PositionChange y);
 
+    void resolveHomeByConnector();
+
     QString m_homeOutput;
+    QString m_homeConnector;
+    bool m_homeUnplugged = false;
     QString m_name;
     OutputArea m_area;
     Anim::Clock m_clock;
     OptionsPtr m_globalOptions;
-    std::optional<Config::Layout> m_layoutOverride;
+    std::optional<Config::LayoutPart> m_layoutOverride;
     OptionsPtr m_options;
     ColumnStrip m_strip;
     FloatingLayer m_floating;

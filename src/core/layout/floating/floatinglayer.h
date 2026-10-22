@@ -57,6 +57,7 @@ public:
     const std::optional<ResizeSession> &interactiveResize() const { return m_resize; }
 
     void addTile(Tile tile, bool activate);
+    static void prepareTileSize(Tile &tile);
     void insertAbove(WindowId above, Tile tile, bool activate);
     DetachedTile removeTile(WindowId id);
     bool activateWindow(WindowId id);
@@ -66,7 +67,7 @@ public:
 
     void setWindowWidth(std::optional<WindowId> window, SizeChange change, bool animate);
     void setWindowHeight(std::optional<WindowId> window, SizeChange change, bool animate);
-    void toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative = false);
+    void toggleWindowWidth(std::optional<WindowId> window, bool forwards, bool fromNative);
     std::optional<std::size_t> closestWidthPresetIndex(std::size_t tileIndex) const;
     void toggleWindowHeight(std::optional<WindowId> window, bool forwards);
 
@@ -103,7 +104,7 @@ private:
     void placeAnimated(std::size_t idx, QPointF newPos);
     void setWindowSize(std::size_t idx, SizeChange change, bool horizontal, bool animate);
     std::size_t togglePresetIndex(std::size_t idx, bool horizontal, bool forwards) const;
-    void prepareTileSize(Tile &tile) const;
+    static void keepWithinSizeLimits(Tile &tile);
 
     std::vector<Tile> m_tiles;
     std::vector<FloatingData> m_data;

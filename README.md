@@ -54,7 +54,7 @@ cd Konveyor
 That's it. The installer grabs what it needs, builds Konveyor for your exact KWin and switches it on, usually without even logging out. It also installs the [Konveyor widgets](#widgets), swaps your application launcher for the Kontrol Panel and opens it on **Shortcuts** so you can see everything Konveyor does.
 
 > [!TIP]
-> Press <kbd>Meta</kbd> + <kbd>K</kbd> any time to open the Kontrol Panel on **Shortcuts**: every shortcut, searchable, with a live diagram of what each Konveyor action does. Its gear, or <kbd>Ctrl</kbd> + <kbd>,</kbd>, jumps straight to Konveyor's settings.
+> Press <kbd>Meta</kbd> + <kbd>K</kbd> any time to open the Kontrol Panel on **Shortcuts**: every shortcut, searchable, with a live diagram of what each Konveyor action does. Its **Settings** button, or <kbd>Ctrl</kbd> + <kbd>,</kbd>, jumps straight to Konveyor's settings.
 
 <table>
   <tr>
@@ -71,7 +71,11 @@ That's it. The installer grabs what it needs, builds Konveyor for your exact KWi
   </tr>
   <tr>
     <td>🧩 <b>Just the tiling</b></td>
-    <td>Run <code>./install.sh --no-widgets</code> to skip the widgets, or <code>./uninstall.sh --keep-widgets</code> to remove only the window manager.</td>
+    <td>Run <code>./install.sh --no-widgets</code> to skip the widgets or remove them from an earlier install, or <code>./uninstall.sh --keep-widgets</code> to remove only the window manager.</td>
+  </tr>
+  <tr>
+    <td>📁 <b>Another location</b></td>
+    <td>Run <code>KONVEYOR_PREFIX=/opt/konveyor ./install.sh</code> to install somewhere other than <code>/usr</code>. The installer adds that location to your session's plugin and QML paths, and updates and <code>./uninstall.sh</code> remember it. Log out and back in once after the first install.</td>
   </tr>
   <tr>
     <td>🧊 <b>Atomic desktops</b></td>
@@ -123,7 +127,7 @@ Workspaces live above and below each other and appear the moment you need one. S
 
 ### 🪟 Float anything
 
-Some windows don't belong in a row. Lift one out with a single key, move it and resize it freely like any normal Plasma window, then drop it back in. Dialogs and pop-ups float on their own.
+Some windows don't belong in a row. Lift one out with a single key, move it and resize it freely like any normal Plasma window, then drop it back in. While you drag a window, a right click switches between dropping it into the row and letting it float. Dialogs and pop-ups float on their own.
 
 <p align="center"><img alt="Floating a window out of the row and back" src="docs/media/floating.gif" width="88%"></p>
 
@@ -160,8 +164,7 @@ Touchpads and touchscreens get the whole row under your fingers. Slide three fin
 | 4-finger pinch | Open or close KDE's Overview |
 | 3-finger tap | Cycle the column width |
 | 4-finger tap | Open the Kontrol Panel |
-| Drag a title bar on a touchscreen | Scroll the row |
-| Hold a title bar on a touchscreen, then drag | Move the window |
+| Drag a title bar on a touchscreen | Move the window |
 
 The swipes, pinch and taps work on touchpads and touchscreens alike. Pick other finger counts, flip natural swiping or hand a gesture back to KDE on the **Touch & Gestures** settings page.
 
@@ -220,7 +223,7 @@ The swipes, pinch and taps work on touchpads and touchscreens alike. Pick other 
 
 ## 🧩 Konveyor widgets
 
-Konveyor comes with a set of Plasma widgets built to match: a full-screen launcher, system and process monitors, a router dashboard, a live system log and your Steam friends. Each one sits in your panel as a small, steady button and opens into a searchable dashboard. They also work as desktop widgets.
+Konveyor comes with a set of Plasma widgets built to match: a full-screen launcher, a taskbar that follows your columns, system and process monitors, a router dashboard, a live system log and your Steam friends. Each one sits in your panel as a small, steady button and opens into a searchable dashboard. They also work as desktop widgets.
 
 <p align="center"><img alt="The Kontrol Panel opening, searching, browsing games, shortcuts and settings" src="docs/media/widgets/launcher.gif" width="92%"></p>
 
@@ -281,6 +284,14 @@ Press <kbd>Meta</kbd> and the desktop dims behind the Kontrol Panel, one place f
     <td>Pin to Home</td>
   </tr>
 </table>
+
+### 🧭 Konveyor Taskbar
+
+Your columns, in your panel. The taskbar lists the columns of the workspace you're on in the same order, so dragging an icon moves its column and moving a column moves its icon. Pinned apps keep their spot and open in pin order. A slim strip next to them shows the workspaces of that screen with a dot for each column; click one to switch or scroll over it. Hold <kbd>Meta</kbd> to see the keys that switch workspaces, or <kbd>Meta</kbd> + <kbd>Alt</kbd> to see the keys that jump to each app. Its look and behaviour are on the **Taskbar** page of Konveyor's settings.
+
+<p align="center"><img alt="Konveyor Taskbar with the workspace strip, a group, pinned apps and the focused app" src="docs/media/widgets/taskbar.png" width="70%"></p>
+
+The installer puts it right after the Kontrol Panel button and takes Plasma's task manager off that panel, keeping its pinned apps.
 
 ### 📊 System Monitor and Process Monitor
 
@@ -413,12 +424,13 @@ Every Konveyor setting lives in the Kontrol Panel. Press <kbd>Meta</kbd> + <kbd>
 | <kbd>Meta</kbd> + <kbd>Ctrl</kbd> + <kbd>←</kbd> <kbd>→</kbd> | Carry the column left or right |
 | <kbd>Meta</kbd> + <kbd>Ctrl</kbd> + <kbd>↑</kbd> <kbd>↓</kbd> | Carry the window up or down, into the next workspace |
 | <kbd>Meta</kbd> + <kbd>R</kbd> | Cycle the column width |
-| <kbd>Meta</kbd> + <kbd>F</kbd> | Cycle full width, fill the screen, back to normal |
-| <kbd>Meta</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> | Fullscreen |
+| <kbd>Meta</kbd> + <kbd>F</kbd> | Toggle fullscreen and windowed |
+| <kbd>Meta</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd> | Toggle fullscreen and windowed |
 | <kbd>Meta</kbd> + <kbd>[</kbd> <kbd>]</kbd> | Stack into the neighbouring column, or pop back out |
 | <kbd>Meta</kbd> + <kbd>Shift</kbd> + <kbd>W</kbd> | Show a column as tabs |
 | <kbd>Meta</kbd> + <kbd>Space</kbd> | Float or unfloat |
 | <kbd>Meta</kbd> + <kbd>1</kbd> … <kbd>9</kbd> | Jump to a workspace |
+| <kbd>Meta</kbd> + <kbd>Alt</kbd> + <kbd>1</kbd> … <kbd>9</kbd> | Jump to a column, the app with that number on the taskbar |
 | <kbd>Meta</kbd> + <kbd>Return</kbd> | Open a terminal |
 | <kbd>Meta</kbd> + <kbd>Q</kbd> | Close the window |
 | <kbd>Meta</kbd> + <kbd>K</kbd> | Open the Kontrol Panel on Shortcuts |
@@ -532,6 +544,18 @@ Other Plasma projects made to sit on the same desktop. Click a banner to open it
   </a>
   <br>
   <a href="https://github.com/DevL0rd/Syncthing-Monitor"><b>Syncthing Monitor</b></a> · Your sync, at a glance.
+</p>
+
+<p align="center">
+  <a href="https://github.com/DevL0rd/Discordinator">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/media/more/discordinator-dark.svg">
+      <source media="(prefers-color-scheme: light)" srcset="docs/media/more/discordinator-light.svg">
+      <img alt="Discordinator — Discord, answered by your AI" src="docs/media/more/discordinator-dark.svg" width="600">
+    </picture>
+  </a>
+  <br>
+  <a href="https://github.com/DevL0rd/Discordinator"><b>Discordinator</b></a> · Discord, answered by your AI.
 </p>
 
 ---

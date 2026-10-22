@@ -64,6 +64,7 @@ QJsonObject windowToJson(const WindowIdentity &identity, const Layout::WindowSta
     object[QStringLiteral("title")] = identity.title;
     object[QStringLiteral("app_id")] = identity.appId;
     object[QStringLiteral("pid")] = identity.pid;
+    object[QStringLiteral("uuid")] = identity.uuid;
     object[QStringLiteral("workspace_id")] = static_cast<qint64>(state.workspace);
     object[QStringLiteral("is_focused")] = state.isFocused;
     object[QStringLiteral("is_floating")] = state.isFloating;
@@ -83,6 +84,22 @@ QJsonObject workspaceToJson(const Layout::WorkspaceState &state)
     object[QStringLiteral("is_active")] = state.isActive;
     object[QStringLiteral("is_focused")] = state.isFocused;
     object[QStringLiteral("active_window_id")] = optionalWindow(state.activeWindow);
+    QJsonArray columns;
+    for (const QList<Layout::WindowId> &column : state.columns) {
+        QJsonArray ids;
+        for (const Layout::WindowId id : column) {
+            ids.append(static_cast<qint64>(id));
+        }
+        columns.append(ids);
+    }
+    object[QStringLiteral("columns")] = columns;
+    QJsonArray displays;
+    for (const Config::ColumnDisplay display : state.columnDisplays) {
+        displays.append(display == Config::ColumnDisplay::Tabbed ? QStringLiteral("tabbed") : QStringLiteral("normal"));
+    }
+    object[QStringLiteral("column_displays")] = displays;
+    static const QStringList groupModes {QStringLiteral("off"), QStringLiteral("beside"), QStringLiteral("stack")};
+    object[QStringLiteral("group_app_windows")] = groupModes.at(static_cast<qsizetype>(state.groupAppWindows));
     return object;
 }
 
@@ -134,11 +151,13 @@ void appendDeviceGestures(QJsonArray &array, const QString &device, const Config
         array.append(gestureToJson(
             device, touch.swipeFingers, QStringLiteral("swipe-vertical"), QStringLiteral("switch-workspace"), touch.naturalSwipe));
     }
-    if (touch.windowHorizontalSwipe == Config::WindowHorizontalSwipe::ConsumeOrExpel) {
+    const bool rowSwipes = touch.horizontalSwipe != Config::HorizontalSwipe::Off || touch.verticalSwipe != Config::VerticalSwipe::Off;
+    const bool windowSwipes = !rowSwipes || touch.windowSwipeFingers != touch.swipeFingers;
+    if (windowSwipes && touch.windowHorizontalSwipe == Config::WindowHorizontalSwipe::ConsumeOrExpel) {
         array.append(gestureToJson(device, touch.windowSwipeFingers, QStringLiteral("window-swipe-horizontal"),
             QStringLiteral("consume-or-expel"), touch.naturalSwipe));
     }
-    if (touch.windowVerticalSwipe == Config::WindowVerticalSwipe::MoveWindow) {
+    if (windowSwipes && touch.windowVerticalSwipe == Config::WindowVerticalSwipe::MoveWindow) {
         array.append(gestureToJson(
             device, touch.windowSwipeFingers, QStringLiteral("window-swipe-vertical"), QStringLiteral("move-window"), touch.naturalSwipe));
     }

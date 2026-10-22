@@ -5,6 +5,7 @@ import org.kde.kirigami as Kirigami
 import org.kde.kquickcontrols as KQuickControls
 
 Kirigami.FormLayout {
+    property string title: i18n("General")
     property alias cfg_pollInterval: pollSpin.value
     property alias cfg_maxRows: rowsSpin.value
     property alias cfg_searchLimit: searchSpin.value
@@ -20,6 +21,21 @@ Kirigami.FormLayout {
     property alias cfg_middleClickPause: middleClickPause.checked
     property string cfg_lastSeen
     property bool cfg_showActivity
+    property var cfg_accentColorDefault
+    property var cfg_compactShowWarningsDefault
+    property var cfg_defaultLevelDefault
+    property var cfg_lastSeenDefault
+    property var cfg_maxRowsDefault
+    property var cfg_middleClickPauseDefault
+    property var cfg_mutedAppsDefault
+    property var cfg_panelDetailDefault
+    property var cfg_panelShrinkDefault
+    property var cfg_pollIntervalDefault
+    property var cfg_searchLimitDefault
+    property var cfg_showActivityDefault
+    property var cfg_showAppDefault
+    property var cfg_stickLinesDefault
+    property var cfg_wrapMessagesDefault
 
     QQC2.CheckBox {
         id: compactShowWarnings

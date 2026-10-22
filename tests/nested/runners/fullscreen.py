@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 import os
+import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "harness"))
 
-from kwinsession import activate, window_state
-from screenshot import capture_workspace
+from dragging import settled
+from kwinsession import CLIENTS, activate, kwin_titles, wait_for, window_state
+from screenshot import capture_workspace, close
 
 TITLE = "SelfFullscreen"
 FULLSCREEN = "true|0,0 1920x1080"
@@ -15,7 +16,8 @@ FULLSCREEN_COLOR = (176, 48, 48, 255)
 COLUMN_COLOR = (47, 48, 51, 255)
 
 
-def check_overlay(problems):
+def overlay_problems():
+    problems = []
     image = capture_workspace(str(Path(os.environ["KONVEYOR_REPORT"]).with_suffix(".png")))
     middle = image.height // 2
     column = [int(value) for value in window_state("A").split("|")[1].replace(" ", ",").replace("x", ",").split(",")]
@@ -24,33 +26,46 @@ def check_overlay(problems):
     beside = image.getpixel((min(image.width - 1, column[0] + column[2] + 40), middle))
     edge_gap = image.getpixel((4, middle))
     print(f"drawn while unfocused: column center {column_center}, right side {right_side}, beside the column {beside}, edge gap {edge_gap}")
-    if column_center != COLUMN_COLOR or right_side != FULLSCREEN_COLOR:
+    if not close(column_center, COLUMN_COLOR) or not close(right_side, FULLSCREEN_COLOR):
         problems.append(f"column A is not drawn over the fullscreen window that stays in place ({column_center}, {right_side})")
     if not beside[0] < FULLSCREEN_COLOR[0] - 40:
         problems.append(f"the fullscreen window is not shaded beside the overlaid column ({beside})")
     if not edge_gap[0] < FULLSCREEN_COLOR[0] - 60:
         problems.append(f"the fullscreen window shows unshaded in the gap under the overlaid columns ({edge_gap})")
+    return problems
 
 
 def main():
     problems = []
-    time.sleep(0.5)
+    signals = Path(os.environ["KONVEYOR_TEST_ROOT"]) / "signals"
+    signals.mkdir()
+    with open(os.environ["KONVEYOR_KWIN_LOG"], "a") as log:
+        subprocess.Popen(["qml6", str(CLIENTS / "fullscreen-client.qml"), "--", str(signals)], stdout=log, stderr=subprocess.STDOUT)
+    wait_for(lambda: TITLE in kwin_titles(), 60)
     activate(TITLE)
-    time.sleep(3)
+    wait_for(lambda: window_state(TITLE) == FULLSCREEN, 60)
     for sample in range(4):
         state = window_state(TITLE)
         print(f"sample {sample}: {state}")
         if state != FULLSCREEN:
             problems.append(f"sample {sample}: window is not fullscreen on the output ({state})")
-        time.sleep(1)
     activate("A")
-    time.sleep(1)
     unfocused = [window_state(TITLE) for _ in range(5)]
     print(f"while unfocused: {unfocused}")
     if any(state != FULLSCREEN for state in unfocused):
         problems.append(f"window did not stay fullscreen and still while unfocused ({unfocused})")
-    check_overlay(problems)
-    time.sleep(4)
+    settled("A")
+    overlay = []
+
+    def overlay_is_rendered():
+        nonlocal overlay
+        overlay = overlay_problems()
+        return not overlay
+
+    wait_for(overlay_is_rendered, 60)
+    problems += overlay
+    (signals / "leave-fullscreen").touch()
+    wait_for(lambda: (window_state(TITLE) or "").startswith("false|") and " 1920x1080" not in window_state(TITLE), 60)
     state = window_state(TITLE)
     print(f"after leaving fullscreen: {state}")
     if not state or not state.startswith("false|") or " 1920x1080" in state:

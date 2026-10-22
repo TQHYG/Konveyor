@@ -107,6 +107,10 @@ std::optional<QRectF> ColumnStrip::dropSlotRect(DropSlot position) const
     } else {
         area->moveLeft(area->x() - scrollPosition());
     }
+    if (position.kind == DropSlot::Kind::NewColumn) {
+        const double half = area->width() / 2.0;
+        area->moveLeft(std::clamp(area->x(), -half, m_area.viewSize.width() - half));
+    }
     return area;
 }
 
@@ -171,7 +175,7 @@ QSize ColumnStrip::initialWindowSize(const std::optional<Config::PresetSize> &wi
     const auto display = rules.defaultColumnDisplay.value_or(m_options->layout.defaultColumnDisplay);
     QSizeF extra(0.0, 0.0);
     if (display == Config::ColumnDisplay::Tabbed) {
-        extra = TabBar(m_options->layout.tabIndicator).reservedSize(1, m_area.scale);
+        extra = TabBar(m_options->layout.tabIndicator).reservedSize(1, m_area.scale, m_options->layout.gaps);
     }
 
     const auto resolve = [&](const Config::PresetSize &preset, double available, double extent) {
@@ -245,56 +249,6 @@ void ColumnStrip::endResize(std::optional<WindowId> window)
         }
     }
     m_resize.reset();
-}
-
-QString ColumnStrip::verifyArea() const
-{
-    if (!(m_area.viewSize.width() > 0.0) || !(m_area.viewSize.height() > 0.0)) {
-        return QStringLiteral("scrolling: view size must be positive");
-    }
-    if (!(m_area.scale > 0.0) || !std::isfinite(m_area.scale)) {
-        return QStringLiteral("scrolling: scale must be positive and finite");
-    }
-    if (m_area.workingArea != workAreaWithStruts(m_area.parentArea, m_area.scale, m_options->layout.struts)) {
-        return QStringLiteral("scrolling: working area must match the struts");
-    }
-    return {};
-}
-
-QString ColumnStrip::verifyColumns() const
-{
-    for (const Column &column : m_columns) {
-        if (column.tiles.empty()) {
-            return QStringLiteral("scrolling: columns must not be empty");
-        }
-        if (column.activeTileIndex >= column.tiles.size()) {
-            return QStringLiteral("scrolling: active tile index out of range");
-        }
-    }
-    return {};
-}
-
-QString ColumnStrip::checkConsistency() const
-{
-    if (const QString error = verifyArea(); !error.isEmpty()) {
-        return error;
-    }
-    if (m_resize && !hasWindow(m_resize->window)) {
-        return QStringLiteral("scrolling: interactive resize window must be present");
-    }
-    if (m_columns.empty()) {
-        return {};
-    }
-    if (m_activeColumnIndex >= m_columns.size()) {
-        return QStringLiteral("scrolling: active column index out of range");
-    }
-    if (const QString error = verifyColumns(); !error.isEmpty()) {
-        return error;
-    }
-    if (m_scrollToRestore && m_columns[m_activeColumnIndex].sizingMode() == WindowMode::Normal) {
-        return QStringLiteral("scrolling: the active column must be fullscreen or maximized to restore a view offset");
-    }
-    return {};
 }
 
 }

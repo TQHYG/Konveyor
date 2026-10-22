@@ -56,6 +56,7 @@ bool KonveyorEffect::handleTouchDown(qint32 id, const QPointF &position, qint64 
     if (!routeGesture(d->gestures.touchDown(id, position, timestampMs, outputNameAt(position)))) {
         return false;
     }
+    cancelTouchMoveResize();
     endTitlebarDrag();
     return true;
 }
@@ -70,6 +71,14 @@ bool KonveyorEffect::handleTouchMotion(qint32 id, const QPointF &position, qint6
         handlePointerMotion(position, timestampMs);
     }
     return false;
+}
+
+void KonveyorEffect::handleTouchCancel()
+{
+    d->gestures.touchCancel();
+    cancelTouchMoveResize();
+    endTitlebarDrag();
+    scheduleFlush();
 }
 
 bool KonveyorEffect::handleTouchUp(qint32 id, qint64 timestampMs)
