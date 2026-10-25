@@ -852,6 +852,7 @@
     "Search apps or type an app id…": "搜索应用或输入应用 ID…",
     "Search shortcuts by action or key…": "按操作或按键搜索快捷键…",
     "Searchable, sortable process tree with per-process CPU, RAM and GPU usage": "可搜索、可排序的进程树，显示每个进程的 CPU、内存和 GPU 占用",
+    "Send all windows (all workspaces) to a specific monitor": "",
     "Send the column to": "将列发送到",
     "Send the column to a workspace": "将列发送到工作区",
     "Send the column to the workspace above": "将列发送到上方的工作区",
