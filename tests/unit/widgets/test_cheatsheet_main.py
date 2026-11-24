@@ -13,7 +13,7 @@ from unittest import mock
 from cheatsheet_module import SCRIPT, load_module
 
 
-RECORDER = """#!/usr/bin/env python3
+RECORDER = "#!" + sys.executable + """
 import json, os, sys
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps({"argv": sys.argv[1:], "shell": os.environ.get("QT_WAYLAND_SHELL_INTEGRATION")}) + "\\n")
@@ -183,6 +183,16 @@ class TestCheatsheetMain(unittest.TestCase):
         with mock.patch.object(self.module.subprocess, "Popen", return_value=replaced):
             self.assertEqual(self.main()[0], 0)
         self.assertEqual(pid_file.read_text().strip(), "999999")
+
+    def test_notify_shows_a_dialog_error_notification(self):
+        interface = mock.Mock()
+        with mock.patch.object(self.module.dbus, "SessionBus") as session, mock.patch.object(self.module.dbus, "Interface", return_value=interface) as make:
+            self.module.notify("Summary", "Message")
+        session.return_value.get_object.assert_called_once_with("org.freedesktop.Notifications", "/org/freedesktop/Notifications")
+        make.assert_called_once_with(session.return_value.get_object.return_value, "org.freedesktop.Notifications")
+        arguments = interface.Notify.call_args.args
+        self.assertEqual((arguments[0], int(arguments[1]), arguments[2], arguments[3], arguments[4], list(arguments[5]), dict(arguments[6]), arguments[7]),
+                         ("Konveyor", 0, "dialog-error", "Summary", "Message", [], {}, 10000))
 
     def test_notify_reports_an_unreachable_bus(self):
         stderr = io.StringIO()

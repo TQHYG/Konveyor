@@ -8,6 +8,7 @@
 #include "decorations/fullscreenshade.h"
 #include "input/gesturefilter.h"
 #include "input/inputfilter.h"
+#include "input/inputsignals.h"
 #include "input/shortcutmanager.h"
 #include "input/spillinputfilter.h"
 #include "input/touchpadcontactreader.h"
@@ -24,9 +25,12 @@
 #include "plugin/notifications.h"
 #include "plugin/windowmemorystore.h"
 
+#include "anim/animation.h"
 #include "anim/clock.h"
 #include "config/loader.h"
 #include "ipc/model.h"
+#include "layout/common/desktoppeek.h"
+#include "layout/common/edgehover.h"
 #include "layout/gestures/gesturerouter.h"
 #include "tools/widgettool.h"
 
@@ -94,6 +98,26 @@ inline const Config::HotCorners &hotCornersOn(const Config::Config &config, cons
     return entry == config.outputs.end() ? config.gestures.hotCorners : *entry->hotCorners;
 }
 
+void setDragFade(KWin::Window *window, std::optional<double> fade);
+
+struct PeekedWindow
+{
+    QPointer<KWin::Window> window;
+    bool keptVisible = false;
+};
+
+struct DesktopPeek
+{
+    QPointer<KWin::Window> kept;
+    QString output;
+    QList<PeekedWindow> faded;
+    Layout::PeekAside aside;
+    std::optional<QRectF> asideFrame;
+    std::optional<Anim::Animation> fade;
+    std::optional<Anim::Animation> slide;
+    bool restoring = false;
+};
+
 struct HeldQuickTiling
 {
     Layout::WindowId window = 0;
@@ -120,6 +144,7 @@ struct KonveyorEffect::Private
     KontrolPanelStacking kontrolPanelStacking;
     std::unique_ptr<SpillInputFilter> spillInput;
     std::unique_ptr<InputFilter> input;
+    std::unique_ptr<InputSignals> inputSignals;
     std::unique_ptr<AxisFilter> axisInput;
     std::unique_ptr<DragMotionFilter> dragMotion;
     std::unique_ptr<GestureFilter> gestureInput;
@@ -131,6 +156,11 @@ struct KonveyorEffect::Private
     QTimer memorySaveTimer;
     QTimer startupRulesTimer;
     QTimer pointerFocusTimer;
+    QTimer edgeHoverTimer;
+    Layout::EdgeHoverTracker edgeHover;
+    QTimer peekTimer;
+    Layout::PeekKey peekKey;
+    std::optional<DesktopPeek> peek;
     QPointer<KWin::Window> pointerFocusCandidate;
     WindowMemoryStore memoryStore;
     LayoutHandoff handoff;
@@ -138,6 +168,7 @@ struct KonveyorEffect::Private
     QSet<KWin::ElectricBorder> reservedCorners;
     double dragOrigin = 0;
     QPointF resizeOrigin;
+    bool resizeByTouch = false;
     quint64 bindCount = 0;
     QString lastBindKey;
     QString lastBindAction;

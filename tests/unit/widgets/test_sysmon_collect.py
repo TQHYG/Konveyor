@@ -89,6 +89,11 @@ class TestSysmonCollect(ServeLoopTests, CollectorTest):
                 mock.patch.object(module.time, "monotonic", return_value=50.0 + interval):
             return module.build()
 
+    def test_cpu_lines_that_are_not_a_core_number_are_skipped(self):
+        module = self.serving_module()
+        self.fake.write("/proc/stat", stat((0, 200), [(0, 100)]).replace("intr", "cpufreq 9 9 9 9 9 9 9\nintr"))
+        self.assertEqual(sorted(module.read_stat()), ["cpu", "cpu0"])
+
     def test_splits_a_hybrid_cpu_into_performance_and_efficiency_cores(self):
         self.write_hybrid()
         module = self.load(SCRIPT, "sysmon_collect")
@@ -169,6 +174,111 @@ class TestSysmonCollect(ServeLoopTests, CollectorTest):
         self.write_minimal()
         module = self.load(SCRIPT, "sysmon_collect", pynvml=fake_nvml(fail_init=True))
         self.assertIsNone(module.build()["gpu"])
+
+    def write_amdgpu(self, card, revision, vram, gtt):
+        dev = "/sys/class/drm/%s/device/" % card
+        files = {"gpu_busy_percent": "37", "mem_info_vram_used": vram[0], "mem_info_vram_total": vram[1],
+                 "mem_info_gtt_used": gtt[0], "mem_info_gtt_total": gtt[1], "power/runtime_status": "active",
+                 "pp_dpm_sclk": "0: 600Mhz \n1: 806Mhz *\n2: 2900Mhz ", "hwmon/hwmon5/temp1_input": "55000",
+                 "hwmon/hwmon5/power1_average": "12345678", "hwmon/hwmon5/freq1_input": "1800000000"}
+        for name, text in files.items():
+            self.fake.write(dev + name, "%s\n" % text)
+        (self.home / ("root" + dev + "gpu_metrics")).write_bytes(bytes([0x08, 0x01, revision, 0]))
+        return dev
+
+    def test_an_amd_apu_reports_vram_and_gtt_as_gpu_memory(self):
+        self.write_minimal()
+        self.fake.write("/proc/cpuinfo", "model name : AMD Ryzen AI 7 350 w/ Radeon 860M\n")
+        self.write_amdgpu("card1", 3, (1 << 29, 1 << 29), (1 << 30, 3 << 30))
+        gpu = self.load(SCRIPT, "sysmon_collect").build()["gpu"]
+        self.assertEqual(gpu, {"name": "AMD Radeon 860M", "util": 37, "vram_used": 3 << 29, "vram_total": 7 << 29,
+                               "vram_pct": 3 / 7 * 100, "temp": 55.0, "power": 12.3, "clock_gr": 1800, "clock_mem": 0,
+                               "fan": 0, "clock_max": 2900, "power_max": 0, "shared": True})
+
+    def test_a_discrete_amd_gpu_wins_over_the_apu_and_counts_only_vram(self):
+        self.write_minimal()
+        self.fake.write("/proc/cpuinfo", "model name : AMD Ryzen AI 7 350 w/ Radeon 860M\n")
+        self.write_amdgpu("card1", 3, (1 << 29, 1 << 29), (0, 1 << 30))
+        dev = self.write_amdgpu("card0", 1, (2 << 30, 16 << 30), (1 << 30, 32 << 30))
+        self.fake.write(dev + "uevent", "DRIVER=amdgpu\nPCI_SLOT_NAME=0000:03:00.0\n")
+        self.fake.write("/run/udev/data/+pci:0000:03:00.0", "E:ID_MODEL_FROM_DATABASE=Navi 32 [Radeon RX 7700 XT / 7800 XT]\n")
+        self.fake.write(dev + "hwmon/hwmon5/pwm1", "64\n")
+        self.fake.write(dev + "hwmon/hwmon5/pwm1_max", "255\n")
+        self.fake.write(dev + "hwmon/hwmon5/power1_cap", "263000000\n")
+        module = self.load(SCRIPT, "sysmon_collect")
+        gpu = module.build()["gpu"]
+        self.assertEqual((gpu["name"], gpu["vram_used"], gpu["vram_total"], gpu["shared"]),
+                         ("AMD Radeon RX 7700 XT / 7800 XT", 2 << 30, 16 << 30, False))
+        self.assertEqual((gpu["fan"], gpu["power_max"]), (25, 263))
+        self.fake.write(dev + "power/runtime_status", "suspended\n")
+        gpu = module.build()["gpu"]
+        self.assertEqual((gpu["util"], gpu["temp"], gpu["power"], gpu["vram_used"], gpu["vram_total"]), (0, 0, 0, 0, 16 << 30))
+
+    def test_nvml_takes_precedence_over_amdgpu(self):
+        self.write_minimal()
+        self.write_amdgpu("card1", 3, (1 << 29, 1 << 29), (0, 1 << 30))
+        self.assertEqual(self.load(SCRIPT, "sysmon_collect", pynvml=fake_nvml()).build()["gpu"]["name"], "Test GPU")
+
+    def write_i915(self, rc6_ms):
+        gt = "/sys/class/drm/card1/gt/gt0/"
+        for name, text in {"rc6_residency_ms": rc6_ms, "rps_act_freq_mhz": 800, "rps_RP0_freq_mhz": 1300}.items():
+            self.fake.write(gt + name, "%s\n" % text)
+        self.fake.write("/sys/class/drm/card1/device/uevent", "DRIVER=i915\nPCI_SLOT_NAME=0000:00:02.0\n")
+        self.fake.write("/run/udev/data/+pci:0000:00:02.0", "E:ID_MODEL_FROM_DATABASE=TigerLake-LP GT2 [Iris Xe Graphics]\n")
+
+    def test_an_intel_gpu_is_reported_when_there_is_no_nvidia_or_amd_gpu(self):
+        self.write_minimal()
+        self.write_i915(1000)
+        gpu = self.load(SCRIPT, "sysmon_collect").build()["gpu"]
+        self.assertEqual(gpu, {"name": "Intel Iris Xe Graphics", "util": 0, "vram_used": 0, "vram_total": 0,
+                               "vram_pct": 0, "temp": None, "power": None, "clock_gr": 800, "clock_mem": None,
+                               "fan": None, "clock_max": 1300, "power_max": None, "shared": True})
+
+    def test_amdgpu_takes_precedence_over_i915(self):
+        self.write_minimal()
+        self.write_i915(1000)
+        self.write_amdgpu("card0", 1, (2 << 30, 16 << 30), (0, 1 << 30))
+        self.assertEqual(self.load(SCRIPT, "sysmon_collect").build()["gpu"]["name"], "AMD GPU")
+
+    def write_net(self, counters):
+        lines = ["Inter-|   Receive |  Transmit", " face |bytes packets|bytes packets"]
+        for name, (rx, tx) in counters.items():
+            lines.append("%6s: %d 0 0 0 0 0 0 0 %d 0 0 0 0 0 0 0" % (name, rx, tx))
+        self.fake.write("/proc/net/dev", "\n".join(lines) + "\n")
+
+    def test_network_throughput_sums_the_physical_interfaces(self):
+        self.write_minimal()
+        for nic in ("enp5s0", "wlan0"):
+            self.fake.write("/sys/class/net/%s/device/uevent" % nic, "")
+        self.write_net({"lo": (0, 0), "enp5s0": (1000, 500), "wlan0": (0, 0), "tailscale0": (0, 0)})
+        module = self.load(SCRIPT, "sysmon_collect")
+        with mock.patch.object(module.time, "monotonic", return_value=50.0):
+            module.build()
+        self.write_net({"lo": (9 << 20, 9 << 20), "enp5s0": (5000, 1500), "wlan0": (2000, 0), "tailscale0": (4000, 4000)})
+        with mock.patch.object(module.time, "monotonic", return_value=52.0):
+            net = module.build()["net"]
+        self.assertEqual(net, {"down": 3000, "up": 500, "ifaces": ["enp5s0", "wlan0"]})
+        self.write_net({"lo": (0, 0), "enp5s0": (100, 100), "wlan0": (4000, 200), "tailscale0": (0, 0)})
+        with mock.patch.object(module.time, "monotonic", return_value=54.0):
+            self.assertEqual(module.build()["net"]["down"], 1000)
+
+    def test_without_a_device_backed_interface_there_is_no_network(self):
+        self.write_minimal()
+        self.write_net({"lo": (0, 0), "docker0": (5, 5)})
+        module = self.load(SCRIPT, "sysmon_collect")
+        with mock.patch.object(module.time, "monotonic", return_value=50.0):
+            self.assertIsNone(module.build()["net"])
+
+    def test_network_throughput_averages_over_two_seconds_at_any_poll_interval(self):
+        self.write_minimal()
+        self.fake.write("/sys/class/net/enp5s0/device/uevent", "")
+        module = self.load(SCRIPT, "sysmon_collect")
+        downs = []
+        for step, received in enumerate([0, 0, 4000, 4000, 4000, 4000, 4000]):
+            self.write_net({"enp5s0": (received, 0)})
+            with mock.patch.object(module.time, "monotonic", return_value=50.0 + step * 0.5):
+                downs.append(module.build()["net"]["down"])
+        self.assertEqual(downs, [0, 0, 4000, 2667, 2000, 2000, 0])
 
     def test_snapshot_before_the_first_write_is_empty(self):
         self.write_minimal()

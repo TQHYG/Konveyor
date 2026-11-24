@@ -62,7 +62,7 @@ void Workspace::setOutput(const OutputArea &area)
         return;
     }
     if (m_area.outputName != area.outputName) {
-        clearWindowedFullscreenFallbacks();
+        clearLockedOutputCovers();
     }
     m_area = area;
     resolveHomeByConnector();
@@ -74,7 +74,7 @@ void Workspace::setOutput(const OutputArea &area)
 
 void Workspace::clearOutput()
 {
-    clearWindowedFullscreenFallbacks();
+    clearLockedOutputCovers();
     m_area.outputName.clear();
     m_area.outputId.clear();
 }
@@ -370,26 +370,6 @@ void Workspace::refresh(bool isActive)
 {
     m_strip.refresh(isActive && !isFloatingFocused());
     m_floating.refresh(isActive && isFloatingFocused());
-}
-
-QString Workspace::checkConsistency() const
-{
-    if (const QString error = m_strip.checkConsistency(); !error.isEmpty()) {
-        return error;
-    }
-    if (const QString error = m_floating.checkConsistency(); !error.isEmpty()) {
-        return error;
-    }
-    if (m_floating.isEmpty() && isFloatingFocused()) {
-        return QStringLiteral("workspace: floating must not be active when empty");
-    }
-    if (!m_floating.isEmpty() && m_strip.isEmpty() && !isFloatingFocused()) {
-        return QStringLiteral("workspace: floating must be active when scrolling is empty");
-    }
-    if (!(*m_options == *resolveOptions(m_globalOptions, m_layoutOverride, m_area.scale))) {
-        return QStringLiteral("workspace: options must be derived from the base options");
-    }
-    return {};
 }
 
 }

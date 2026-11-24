@@ -88,6 +88,7 @@ struct ResolvedPaint
     Config::ColorSource source = Config::ColorSource::Explicit;
     QColor color;
     std::optional<Config::Gradient> gradient;
+    bool isSet() const { return source != Config::ColorSource::Explicit || color.isValid() || gradient.has_value(); }
     bool operator==(const ResolvedPaint &) const = default;
 };
 
@@ -96,6 +97,7 @@ struct DecorationState
     bool enabled = false;
     double width = 0;
     ResolvedPaint paint;
+    QString style;
     bool operator==(const DecorationState &) const = default;
 };
 
@@ -138,7 +140,8 @@ struct WindowState
     std::optional<QSizeF> requestedMaxSize;
     DecorationState focusRing;
     DecorationState border;
-    Config::CornerRadius cornerRadius;
+    Config::EventEffects eventEffects;
+    std::optional<Config::CornerRadius> cornerRadius;
     bool clipToGeometry = false;
     TabBarState tabBar;
     int columnIndex = 0;
@@ -153,7 +156,7 @@ struct RestorePlacement
 {
     WorkspaceId workspace = 0;
     bool isFloating = false;
-    bool isWindowedFullscreenFallback = false;
+    bool coversLockedOutput = false;
     bool returnsToFloating = false;
     WindowMode requestedSizingMode = WindowMode::Normal;
     std::optional<QSize> savedFloatingSize;
@@ -164,6 +167,15 @@ struct RestorePlacement
     bool fillsWidth = false;
     std::optional<Config::ColumnDisplay> columnDisplay;
     QRectF floatingFrame;
+};
+
+struct OutputViewState
+{
+    QString output;
+    WorkspaceId workspace = 0;
+    double offset = 0.0;
+    double width = 0.0;
+    std::size_t activeColumn = 0;
 };
 
 struct WorkspaceState
@@ -234,6 +246,7 @@ public:
     void removeWindow(WindowId id);
     void updateWindowProperties(WindowId id, const WindowProperties &properties);
     void windowSizeCommitted(WindowId id, const QSizeF &frameSize);
+    void setWindowNativeSize(WindowId id, const QSizeF &frameSize);
     void setFloatingFrame(WindowId id, const QRectF &frame);
     void activateWindow(WindowId id);
     void setLayoutFocused(bool focused);
@@ -271,6 +284,7 @@ public:
     QList<WindowState> windowStates() const;
     std::optional<WindowState> windowState(WindowId id) const;
     QList<WorkspaceState> workspaceStates() const;
+    QList<OutputViewState> outputViewStates() const;
     QList<OutputState> outputStates() const;
     std::optional<WindowId> focusedWindow() const;
     std::optional<WindowId> movingWindow() const;
@@ -285,11 +299,11 @@ public:
     void refreshRules();
     void setOverviewOpen(bool open);
 
-    QString checkConsistency() const;
-
     struct Private;
 
 private:
+    friend struct ConsistencyCheck;
+
     std::unique_ptr<Private> d;
 };
 

@@ -13,9 +13,13 @@
 #include <window.h>
 #include <workspace.h>
 
+#include <wayland_server.h>
+#include <xdgshellwindow.h>
+
 #include <QScopedValueRollback>
 
 #include <algorithm>
+#include <utility>
 
 namespace Konveyor
 {
@@ -29,9 +33,71 @@ bool nearlyEqual(const QRectF &a, const QRectF &b)
     return close(a.x(), b.x()) && close(a.y(), b.y()) && close(a.width(), b.width()) && close(a.height(), b.height());
 }
 
+bool isSameSize(const QSizeF &a, const QSizeF &b)
+{
+    return std::abs(a.width() - b.width()) < 1.0 && std::abs(a.height() - b.height()) < 1.0;
+}
+
 bool isUserManipulated(KWin::Window *window)
 {
     return window->isInteractiveMove() || window->isInteractiveResize();
+}
+
+#ifdef KONVEYOR_KWIN_CONFINES_COMMITS
+using UnrestrictedFlag = bool KWin::XdgToplevelWindow::*;
+
+template<UnrestrictedFlag Flag> struct UnrestrictedFlagAccess
+{
+    friend UnrestrictedFlag unrestrictedFlag() { return Flag; }
+};
+
+UnrestrictedFlag unrestrictedFlag();
+template struct UnrestrictedFlagAccess<&KWin::XdgToplevelWindow::m_isUnrestricted>;
+
+void setExemptFromConfinement(KWin::Window *window, bool exempt)
+{
+    if (KWin::XdgToplevelWindow *toplevel = KWin::waylandServer()->findXdgToplevelWindow(window->surface())) {
+        toplevel->*unrestrictedFlag() = exempt;
+    }
+}
+#else
+void setExemptFromConfinement(KWin::Window *, bool) { }
+#endif
+
+using NextStates = KWin::XdgToplevelInterface::States KWin::XdgToplevelWindow::*;
+using ConfigureScheduler = void (KWin::Window::*)();
+
+template<NextStates Flag> struct NextStatesAccess
+{
+    friend NextStates nextStates() { return Flag; }
+};
+
+template<ConfigureScheduler Function> struct ConfigureSchedulerAccess
+{
+    friend ConfigureScheduler configureScheduler() { return Function; }
+};
+
+NextStates nextStates();
+ConfigureScheduler configureScheduler();
+template struct NextStatesAccess<&KWin::XdgToplevelWindow::m_nextStates>;
+template struct ConfigureSchedulerAccess<&KWin::Window::doSetActive>;
+
+constexpr KWin::XdgToplevelInterface::States TiledEdges {KWin::XdgToplevelInterface::State::TiledLeft
+    | KWin::XdgToplevelInterface::State::TiledRight | KWin::XdgToplevelInterface::State::TiledTop
+    | KWin::XdgToplevelInterface::State::TiledBottom};
+
+void setStrictSize(KWin::Window *window, bool strict)
+{
+    KWin::XdgToplevelWindow *toplevel = KWin::waylandServer()->findXdgToplevelWindow(window->surface());
+    if (!toplevel) {
+        return;
+    }
+    KWin::XdgToplevelInterface::States &states = toplevel->*nextStates();
+    const KWin::XdgToplevelInterface::States wanted = strict ? (states | TiledEdges) : (states & ~TiledEdges);
+    if (wanted != states) {
+        states = wanted;
+        (toplevel->*configureScheduler())();
+    }
 }
 
 }
@@ -39,6 +105,15 @@ bool isUserManipulated(KWin::Window *window)
 WindowApplier::WindowApplier(const WindowRegistry &windows)
     : m_windows(windows)
 { }
+
+WindowApplier::~WindowApplier()
+{
+    for (const QPointer<KWin::Window> &window : std::as_const(m_parked)) {
+        if (window) {
+            setExemptFromConfinement(window, false);
+        }
+    }
+}
 
 void WindowApplier::apply(const QList<Layout::WindowState> &states)
 {
@@ -54,17 +129,53 @@ void WindowApplier::apply(const QList<Layout::WindowState> &states)
             continue;
         }
         const QRectF frame = placedFrame(state);
+        setParked(state.id, window, frame != frameFor(state));
         const auto previous = m_appliedFrames.constFind(state.id);
         const std::optional<QSizeF> requestedSize = previous != m_appliedFrames.constEnd() ? std::optional(previous->size()) : std::nullopt;
         if (!frame.isEmpty()) {
             m_appliedFrames.insert(state.id, frame);
+            QList<QSizeF> &inFlight = m_inFlightSizes[state.id];
+            if (!requestedSize || *requestedSize != frame.size()) {
+                inFlight.removeAll(frame.size());
+                inFlight.append(frame.size());
+            }
         }
         applySizingMode(window, state);
-        applyGeometry(window, frame, requestedSize, !state.isFloating, state.isForceResizable || window->isResizable(),
+        setStrictSize(window, keepsStrictSize(window, state, frame));
+        applyGeometry(window, frame, requestedSize, !state.isFloating,
+            state.isForceResizable || window->isResizable() || m_strictUntilSettled.contains(state.id),
             state.requestedSizingMode == Layout::WindowMode::Fullscreen);
         applyBorderRadius(window, state);
     }
     applyStacking(states);
+}
+
+bool WindowApplier::keepsStrictSize(KWin::Window *window, const Layout::WindowState &state, const QRectF &frame)
+{
+    const bool tiled = !state.isFloating && state.requestedSizingMode != Layout::WindowMode::Fullscreen && !window->isRequestedFullScreen();
+    if (tiled && state.isForceResizable && !window->isResizable()) {
+        m_strictUntilSettled.insert(state.id);
+        return true;
+    }
+    if (!m_strictUntilSettled.contains(state.id)) {
+        return false;
+    }
+    if (!tiled || isSameSize(window->frameGeometry().size(), frame.size())) {
+        m_strictUntilSettled.remove(state.id);
+        return false;
+    }
+    return true;
+}
+
+bool WindowApplier::consumeInFlightSize(Layout::WindowId id, const QSizeF &size)
+{
+    QList<QSizeF> &inFlight = m_inFlightSizes[id];
+    const auto match = std::ranges::find_if(inFlight, [&size](const QSizeF &requested) { return isSameSize(requested, size); });
+    if (match == inFlight.end()) {
+        return false;
+    }
+    inFlight.erase(inFlight.begin(), match + 1);
+    return true;
 }
 
 bool WindowApplier::isApplying() const
@@ -78,7 +189,7 @@ bool WindowApplier::isEchoOfAppliedSize(Layout::WindowId id, const QSizeF &size)
     if (applied == m_appliedFrames.constEnd()) {
         return false;
     }
-    return std::abs(applied->width() - size.width()) < 1.0 && std::abs(applied->height() - size.height()) < 1.0;
+    return isSameSize(applied->size(), size);
 }
 
 bool WindowApplier::isEchoOfAppliedFrame(Layout::WindowId id, const QRectF &frame) const
@@ -109,7 +220,25 @@ void WindowApplier::forget(Layout::WindowId id)
 {
     m_overriddenOpacity.remove(id);
     m_appliedFrames.remove(id);
+    m_inFlightSizes.remove(id);
+    m_strictUntilSettled.remove(id);
     m_loggedTargets.remove(id);
+    if (const QPointer<KWin::Window> window = m_parked.take(id)) {
+        setExemptFromConfinement(window, false);
+    }
+}
+
+void WindowApplier::setParked(Layout::WindowId id, KWin::Window *window, bool parked)
+{
+    if (parked == m_parked.contains(id)) {
+        return;
+    }
+    if (parked) {
+        m_parked.insert(id, window);
+    } else {
+        m_parked.remove(id);
+    }
+    setExemptFromConfinement(window, parked);
 }
 
 void WindowApplier::logTargetChange(KWin::Window *window, const Layout::WindowState &state)
@@ -188,7 +317,7 @@ void WindowApplier::applyGeometry(KWin::Window *window, const QRectF &frame, con
 
 void WindowApplier::applyBorderRadius(KWin::Window *window, const Layout::WindowState &state)
 {
-    const Config::CornerRadius &radius = state.cornerRadius;
+    const Config::CornerRadius radius = state.cornerRadius.value_or(Config::CornerRadius());
     const KWin::BorderRadius wanted = state.clipToGeometry
         ? KWin::BorderRadius(radius.topLeft, radius.topRight, radius.bottomRight, radius.bottomLeft)
         : window->isDecorated() ? KWin::BorderRadius::from(window->decoration()->borderRadius())

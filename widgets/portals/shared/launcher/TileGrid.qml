@@ -23,6 +23,10 @@ GridView {
     readonly property int columns: Math.max(1, Math.floor(width / cellWidth))
     readonly property bool keyboardSelection: sectionActive && currentIndex >= 0
 
+    Kirigami.WheelHandler {
+        target: grid.scrolling ? grid : null
+    }
+
     interactive: scrolling
     implicitHeight: shownCount > 0 ? Math.ceil(shownCount / columns) * cellHeight : 0
     currentIndex: -1

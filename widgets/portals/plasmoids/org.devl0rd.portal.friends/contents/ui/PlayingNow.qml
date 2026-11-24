@@ -31,6 +31,10 @@ PopCard {
         model: root.playingNow
         QQC2.ScrollBar.horizontal: QQC2.ScrollBar { policy: QQC2.ScrollBar.AlwaysOff }
 
+        Kirigami.WheelHandler {
+            target: strip
+        }
+
         delegate: Item {
             id: tile
             required property var modelData

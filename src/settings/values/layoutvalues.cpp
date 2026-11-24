@@ -15,6 +15,27 @@ QVariantList sizesValue(const QList<Config::PresetSize> &sizes)
     return list;
 }
 
+QVariantMap eventEffectsValue(const Config::EventEffects &effects)
+{
+    static const QStringList events {QStringLiteral("focus"), QStringLiteral("unfocus"), QStringLiteral("click"), QStringLiteral("scroll"),
+        QStringLiteral("keypress"), QStringLiteral("urgent"), QStringLiteral("beat"), QStringLiteral("view")};
+    static const QStringList reaches {QStringLiteral("self"), QStringLiteral("neighbors"), QStringLiteral("all")};
+    QVariantMap values;
+    for (std::size_t index = 0; index < Config::kEventTriggerCount; ++index) {
+        const std::optional<Config::EventEffect> &effect = effects.slots_[index];
+        if (effect) {
+            values.insert(events.at(static_cast<qsizetype>(index)),
+                QVariantMap {
+                    {QStringLiteral("style"), effect->style},
+                    {QStringLiteral("reach"), reaches.at(static_cast<qsizetype>(effect->reach))},
+                    {QStringLiteral("mode"), effect->mode == Config::EventMode::While ? QStringLiteral("while") : QStringLiteral("once")},
+                    {QStringLiteral("duration"), effect->duration.value_or(0.0)},
+                });
+        }
+    }
+    return values;
+}
+
 QVariantMap borderValue(const Config::Border &border)
 {
     return {
@@ -23,6 +44,9 @@ QVariantMap borderValue(const Config::Border &border)
         {QStringLiteral("active"), paintValue(border.active)},
         {QStringLiteral("inactive"), paintValue(border.inactive)},
         {QStringLiteral("urgent"), paintValue(border.urgent)},
+        {QStringLiteral("active-style"), border.activeStyle},
+        {QStringLiteral("inactive-style"), border.inactiveStyle},
+        {QStringLiteral("urgent-style"), border.urgentStyle},
     };
 }
 
@@ -57,10 +81,12 @@ QVariantMap layoutValues(const Config::Layout &layout)
         {QStringLiteral("new-column-position"),
             layout.newColumnPosition == Config::NewColumnPosition::Left ? QStringLiteral("left") : QStringLiteral("right")},
         {QStringLiteral("always-center-single-column"), layout.alwaysCenterSingleColumn},
+        {QStringLiteral("wrap-columns"), layout.wrapColumns},
         {QStringLiteral("always-expand-single-column"), layout.alwaysExpandSingleColumn},
         {QStringLiteral("empty-workspace-above-first"), layout.emptyWorkspaceAboveFirst},
         {QStringLiteral("fixed-workspace-count"), layout.fixedWorkspaceCount},
         {QStringLiteral("horizontal-desktops"), layout.horizontalDesktops},
+        {QStringLiteral("wrap-workspaces"), layout.wrapWorkspaces},
         {QStringLiteral("remember-window-sizes"), layout.rememberWindowSizes},
         {QStringLiteral("remember-window-positions"), layout.rememberWindowPositions},
         {QStringLiteral("group-app-windows"), groupModes.at(static_cast<qsizetype>(layout.groupAppWindows))},
@@ -82,6 +108,7 @@ QVariantMap layoutValues(const Config::Layout &layout)
             }},
         {QStringLiteral("focus-ring"), borderValue(layout.focusRing)},
         {QStringLiteral("border"), borderValue(layout.border)},
+        {QStringLiteral("event-effects"), eventEffectsValue(layout.eventEffects)},
         {QStringLiteral("tab-indicator"), tabIndicatorValue(layout.tabIndicator)},
         {QStringLiteral("insert-hint"),
             QVariantMap {

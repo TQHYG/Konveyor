@@ -230,7 +230,7 @@ void Engine::Private::placeNewWindow(
     }
     const ColumnWidth width = workspace->tiledWidthFor(tile.window(), plan.width);
     MonitorAddRequest request = makeAddRequest(plan, width);
-    if (!restore && plan.rules.openAtColumn && !plan.isFloating && !plan.parent) {
+    if (!restore && plan.rules.openAtColumn && !plan.isFloating && !plan.parent && !workspace->options()->layout.wrapColumns) {
         const std::size_t columns = workspace->scrolling().columns().size();
         request.target
             = MonitorAddTarget::onWorkspace(workspace->id(), std::min(static_cast<std::size_t>(*plan.rules.openAtColumn - 1), columns));
@@ -276,7 +276,7 @@ void Engine::updateWindowProperties(WindowId id, const WindowProperties &propert
         tile->updateWindow();
     }
     if (!wasLocked && window.requestedMode() != WindowMode::Fullscreen && d->isLockedToOutputSize(id)) {
-        d->floatOverOutput(id);
+        d->presentOverOutput(id);
     }
     d->refresh();
 }
@@ -299,13 +299,7 @@ void Engine::windowSizeCommitted(WindowId id, const QSizeF &frameSize)
 
 void Engine::setFloatingFrame(WindowId id, const QRectF &frame)
 {
-    d->setFloatingFrame(id, frame);
-    d->refresh();
-}
-
-void Engine::Private::setFloatingFrame(WindowId id, const QRectF &frame)
-{
-    Monitor *monitor = monitorOf(id);
+    Monitor *monitor = d->monitorOf(id);
     const std::optional<std::size_t> index = monitor ? monitor->workspaceOfWindow(id) : std::nullopt;
     if (!index) {
         return;
@@ -315,8 +309,9 @@ void Engine::Private::setFloatingFrame(WindowId id, const QRectF &frame)
     if (!tile || !workspace.isFloating(id)) {
         return;
     }
-    const QPointF origin = originOf(monitor->outputName()) + QPointF(0.0, workspaceRenderOffsets(*monitor)[*index]);
+    const QPointF origin = d->originOf(monitor->outputName()) + QPointF(0.0, d->workspaceRenderOffsets(*monitor)[*index]);
     workspace.setFloatingFrame(id, frame.topLeft() - origin - tile->windowOffset(), frame.size());
+    d->refresh();
 }
 
 void Engine::activateWindow(WindowId id)
@@ -364,12 +359,10 @@ void Engine::setWindowFullscreen(WindowId id, bool fullscreen)
         Tile *tile = workspace->tileFor(id);
         const bool keepPresentation = !fullscreen && !workspace->isFloating(id) && !tile->returnsToFloating
             && tile->window().requestedMode() == WindowMode::Fullscreen && d->isLockedToOutputSize(id);
-        workspace->setFullscreen(id, fullscreen || keepPresentation);
         if (keepPresentation) {
-            tile->isWindowedFullscreenFallback = true;
-            tile->window().requestWindowedFullscreen(true);
-        } else if (!fullscreen && d->isLockedToOutputSize(id)) {
-            d->floatOverOutput(id);
+            d->presentOverOutput(id);
+        } else {
+            workspace->setFullscreen(id, fullscreen);
         }
         d->refresh();
     }

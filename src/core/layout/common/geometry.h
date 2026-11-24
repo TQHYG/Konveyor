@@ -42,6 +42,7 @@ GeometryUpdate geometryUpdateFor(
 
 QRectF workAreaWithStruts(QRectF parentArea, double scale, const Config::Struts &struts);
 double scrollToReveal(double curX, double viewWidth, double newColX, double newColWidth, double gaps);
+double nearestPeriodCopy(double x, double reference, double period);
 
 int clampToSizeLimits(int x, int minSize, int maxSize);
 int clampToSizeLimitsAllowZero(int x, int minSize, int maxSize);
@@ -54,8 +55,5 @@ QRectF parkedFrame(QRectF frame, QRectF home, const QList<QRectF> &outputs);
 
 PresetExtent measurePreset(const Config::PresetSize &preset, const Options &options, double viewSize, double reservedSize);
 PresetExtent measureFloatingPreset(const Config::PresetSize &preset, double viewSize);
-
-double borderExtent(const Config::Border &border);
-QSize maxWindowBounds(const Config::Border &border, QSizeF workingAreaSize, QSizeF reservedSize, double gaps);
 
 }

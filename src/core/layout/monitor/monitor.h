@@ -118,7 +118,6 @@ public:
     double workspaceHeightWithGap() const;
     std::vector<double> workspaceRenderOffsets() const;
     double transitionProgress() const;
-    bool isWorkspaceSwitching() const { return m_transition.has_value(); }
     bool isWorkspaceGesture() const { return m_transition && m_transition->isGesture(); }
 
     void beginWorkspaceSwipe(bool isTouchpad, bool continueMotion = true);
@@ -138,15 +137,18 @@ public:
     std::optional<DropHint> dropHint;
     bool overviewOpen = false;
 
-    QString checkConsistency() const;
-
 private:
+    friend struct ConsistencyCheck;
+
     void maintainFixedWorkspaces();
     void applyOptions();
     void shiftForInsertion(std::size_t idx);
     void ownWorkspace(std::size_t idx);
     void addEmptyWorkspacesAround(std::size_t &workspaceIndex);
     std::optional<std::size_t> previousWorkspaceIndex() const;
+    std::size_t workspaceAbove() const;
+    std::size_t workspaceBelow() const;
+    bool wrapsWorkspaces() const;
     std::size_t resolveAddWorkspace(const MonitorAddTarget &target, AddTarget &workspaceTarget) const;
     double swipeDistance(const WorkspaceSwipe &gesture) const;
     void animateTileBetweenWorkspaces(

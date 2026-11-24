@@ -33,7 +33,19 @@ private Q_SLOTS:
         QCOMPARE(settings.values()->value(QStringLiteral("launchers")).toStringList(), QStringList());
         QVERIFY(settings.isDefault(QStringLiteral("iconSpacing")));
         QCOMPARE(settings.defaultValue(QStringLiteral("pillContent")).toInt(), 0);
+        QCOMPARE(settings.defaultValue(QStringLiteral("appNames")).toInt(), 0);
+        QCOMPARE(settings.defaultValue(QStringLiteral("appNameWidth")).toInt(), 140);
         QVERIFY(!settings.defaultValue(QStringLiteral("nothing")).isValid());
+    }
+
+    void unknownKeysAreDefaultAndCannotBeReset()
+    {
+        TaskbarSettings settings;
+        QVERIFY(settings.isDefault(QStringLiteral("nothing")));
+        QVERIFY(settings.values()->setProperty("iconSpacing", 7));
+        settings.reset(QStringLiteral("nothing"));
+        QCOMPARE(settings.values()->value(QStringLiteral("iconSpacing")).toInt(), 7);
+        QVERIFY(!settings.isDefault(QStringLiteral("iconSpacing")));
     }
 
     void aChangeReachesEveryReader()

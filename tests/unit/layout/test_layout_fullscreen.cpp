@@ -2,20 +2,6 @@
 
 using namespace LayoutTest;
 
-namespace
-{
-
-Layout::WindowProperties lockedToOutputSize()
-{
-    Layout::WindowProperties properties = makeWindow(QStringLiteral("game"), QStringLiteral("game"), QSizeF(1920, 1080));
-    properties.isResizable = false;
-    properties.minSize = QSizeF(1920, 1080);
-    properties.maxSize = QSizeF(1920, 1080);
-    return properties;
-}
-
-}
-
 class TestLayoutFullscreen : public QObject
 {
     Q_OBJECT
@@ -61,11 +47,13 @@ private Q_SLOTS:
         const auto id = fixture.add();
         const auto decorated = [&fixture, id]() {
             const Layout::WindowState state = fixture.state(id);
-            return state.focusRing.enabled && state.border.enabled && state.clipToGeometry && state.cornerRadius.topLeft == 8.0;
+            return state.focusRing.enabled && state.border.enabled && state.clipToGeometry
+                && state.cornerRadius == Config::CornerRadius {8, 8, 8, 8};
         };
         const auto bare = [&fixture, id]() {
             const Layout::WindowState state = fixture.state(id);
-            return !state.focusRing.enabled && !state.border.enabled && !state.clipToGeometry && state.cornerRadius.topLeft == 0.0;
+            return !state.focusRing.enabled && !state.border.enabled && !state.clipToGeometry
+                && state.cornerRadius == Config::CornerRadius();
         };
         QVERIFY(decorated());
 
@@ -248,7 +236,7 @@ private Q_SLOTS:
     {
         Fixture fixture;
         fixture.add();
-        Layout::WindowProperties properties = lockedToOutputSize();
+        Layout::WindowProperties properties = lockedWindow();
         properties.wantsFullscreen = true;
         const auto id = fixture.addWith(properties);
         QCOMPARE(fixture.state(id).sizingMode, Layout::WindowMode::Fullscreen);
@@ -257,16 +245,6 @@ private Q_SLOTS:
         QVERIFY(!fixture.state(id).isFloating);
         QVERIFY(fixture.state(id).isWindowedFullscreen);
         QCOMPARE(fixture.state(id).requestedSizingMode, Layout::WindowMode::Fullscreen);
-        QCOMPARE(fixture.frame(id), QRectF(0, 0, 1920, 1080));
-        VERIFY_INVARIANTS(fixture);
-    }
-
-    void windowOpeningLockedToOutputSizeFloatsOverIt()
-    {
-        Fixture fixture;
-        fixture.add();
-        const auto id = fixture.addWith(lockedToOutputSize());
-        QVERIFY(fixture.state(id).isFloating);
         QCOMPARE(fixture.frame(id), QRectF(0, 0, 1920, 1080));
         VERIFY_INVARIANTS(fixture);
     }

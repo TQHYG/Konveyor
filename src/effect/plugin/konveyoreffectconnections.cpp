@@ -24,6 +24,16 @@ void runMonitorOverlay(const QStringList &arguments)
 
 void KonveyorEffect::installInputFilter()
 {
+    d->inputSignals = std::make_unique<InputSignals>(d->decorations.signalBus(),
+        InputSignals::Handlers {
+            [this](KWin::Window *window) -> std::optional<quint64> { return d->windows.idOf(window); },
+            [this](Config::EventTrigger trigger, quint64 window, const Render::SignalPoint &at) {
+                d->decorations.fireEvent(trigger, window, at.position, at.direction);
+            },
+            [this] { d->decorations.scheduleBorderFrames(); },
+        });
+    connect(&d->decorations.battery(), &BatteryMonitor::onBatteryChanged, d->inputSignals.get(),
+        [this](bool onBattery) { d->inputSignals->setOnBattery(onBattery); });
     d->spillInput = std::make_unique<SpillInputFilter>([this](KWin::Window *window, const QPointF &position) {
         const std::optional<Layout::WindowId> id = d->windows.idOf(window);
         const auto home = id ? d->homeOutputs.constFind(*id) : d->homeOutputs.constEnd();
@@ -38,7 +48,11 @@ void KonveyorEffect::installInputFilter()
               Config::ScrollDirection direction) { return d->shortcuts.triggerPointerBind(trigger, modifiers, button, direction); };
     d->input = std::make_unique<InputFilter>(InputHandlers {
         pointerBind,
-        [this](const QPointF &position, qint64 timestamp) { handlePointerMotion(position, timestamp); },
+        [this](const QPointF &position, qint64 timestamp) {
+            trackEdgeHover(position);
+            trackPeekPointer(position);
+            handlePointerMotion(position, timestamp);
+        },
         [this] { endTitlebarDrag(); },
         [this](const QPointF &position) { return switchToTabUnderPointer(position); },
         [this](quint32 keycode, Config::BindModifiers modifiers, bool repeat) {
@@ -52,10 +66,14 @@ void KonveyorEffect::installInputFilter()
                 d->dbus->setModifiersHeld(super, alt);
             }
         },
+        [this](int key, bool pressed, Qt::KeyboardModifiers modifiers) { return handlePeekKey(key, pressed, modifiers); },
+        [this](bool used) { return handlePeekPointer(used); },
     });
     d->axisInput = std::make_unique<AxisFilter>(pointerBind);
     d->dragMotion = std::make_unique<DragMotionFilter>([this](const QPointF &position, qint64 timestampMs) {
-        changeEngine().dataDragEdgeScroll(outputNameAt(position), position, timestampMs);
+        if (!d->peekKey.isPeeking()) {
+            changeEngine().dataDragEdgeScroll(outputNameAt(position), position, timestampMs);
+        }
     });
     installGestureFilters();
 }
@@ -124,6 +142,7 @@ void KonveyorEffect::connectWindowLifecycle()
         }
         changeEngine().removeWindow(id);
         followActiveWindowAfterClose();
+        d->inputSignals->forget(id);
         d->decorations.remove(id);
         d->fullscreenShade.remove(id);
         d->applier.forget(id);
@@ -145,6 +164,7 @@ void KonveyorEffect::connectWindowLifecycle()
 void KonveyorEffect::connectWindowState()
 {
     connect(&d->windows, &WindowRegistry::sizeCommitted, this, &KonveyorEffect::handleWindowSizeCommitted);
+    connect(&d->windows, &WindowRegistry::clientRequestedSize, this, &KonveyorEffect::handleClientRequestedSize);
     connect(&d->windows, &WindowRegistry::fullscreenRequested, this, [this](Layout::WindowId id, bool fullscreen) {
         if (d->applier.isApplying()) {
             qCInfo(lcKonveyor) << "konveyor: fullscreen change for window" << id << "=" << fullscreen << "came from Konveyor itself";
@@ -177,29 +197,47 @@ void KonveyorEffect::handleWindowSizeCommitted(Layout::WindowId id, const QSizeF
         scheduleFlush();
         return;
     }
-    const bool acknowledgesRequest = d->applier.isEchoOfAppliedSize(id, size);
+    const bool inFlight = d->applier.consumeInFlightSize(id, size);
+    const bool acknowledgesRequest = inFlight || d->applier.isEchoOfAppliedSize(id, size);
     const bool resizedByUser = !d->applier.isApplying() && window && window->isInteractiveResize();
     const std::optional<Layout::WindowState> state = readEngine().windowState(id);
-    const bool resizedByApp = !d->applier.isApplying() && window && !window->isResizable() && state && !state->isForceResizable;
-    if (!acknowledgesRequest && !resizedByUser && !d->applier.isApplying()) {
-        qCInfo(lcKonveyor) << "konveyor: window" << id << (window ? window->resourceClass() : QString()) << "committed unrequested size"
-                           << size << "resizable =" << (window && window->isResizable()) << "taken as app resize =" << resizedByApp
+    const bool chosenByClient = !acknowledgesRequest && !resizedByUser && !d->applier.isApplying() && window && !window->isResizable();
+    if (chosenByClient) {
+        qCInfo(lcKonveyor) << "konveyor: window" << id << window->resourceClass() << "chose its own size" << size
                            << "target =" << (state ? state->targetFrame : QRectF());
+        changeEngine().setWindowNativeSize(id, size);
+        if (state && !state->isForceResizable) {
+            changeEngine().updateWindowProperties(id, d->windows.propertiesOf(window));
+        }
     }
-    if (resizedByApp) {
-        changeEngine().updateWindowProperties(id, d->windows.propertiesOf(window));
-    }
-    if (acknowledgesRequest || resizedByUser || resizedByApp) {
+    if (acknowledgesRequest || resizedByUser || (chosenByClient && state && !state->isForceResizable)) {
         changeEngine().windowSizeCommitted(id, size);
     }
     scheduleFlush();
+}
+
+void KonveyorEffect::handleClientRequestedSize(Layout::WindowId id, const QSizeF &size)
+{
+    KWin::Window *window = d->windows.windowOf(id);
+    if (window && !window->isResizable() && !d->applier.isApplying() && !d->applier.isEchoOfAppliedSize(id, size)) {
+        changeEngine().setWindowNativeSize(id, size);
+        scheduleFlush();
+    }
 }
 
 void KonveyorEffect::connectDragAndDrop()
 {
     KWin::SeatInterface *seat = KWin::waylandServer()->seat();
     connect(seat, &KWin::SeatInterface::dragStarted, this, [this] { changeEngine().beginDataDrag(); });
-    connect(seat, &KWin::SeatInterface::dragEnded, this, [this] { changeEngine().endDataDrag(); });
+    connect(seat, &KWin::SeatInterface::dragEnded, this, [this] {
+        changeEngine().endDataDrag();
+        runPeekStep(d->peekKey.dragEnded());
+    });
+    connect(KWin::waylandServer(), &KWin::WaylandServer::lockStateChanged, this, [this] {
+        if (KWin::waylandServer()->isScreenLocked()) {
+            runPeekStep(d->peekKey.reset());
+        }
+    });
 }
 
 void KonveyorEffect::connectOutputs()

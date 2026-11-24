@@ -8,9 +8,6 @@
 namespace Konveyor
 {
 
-namespace
-{
-
 void setDragFade(KWin::Window *window, std::optional<double> fade)
 {
     KWin::WindowItem *item = window ? window->windowItem() : nullptr;
@@ -25,14 +22,18 @@ void setDragFade(KWin::Window *window, std::optional<double> fade)
     }
 }
 
-}
-
 KonveyorEffect::KonveyorEffect()
 {
     d = std::make_unique<Private>(makeHooks(), [this](const Config::Bind &bind) {
         ++d->bindCount;
         d->lastBindKey = Config::bindKeyLabel(bind);
         d->lastBindAction = bind.action.name;
+        if (Config::bindActsOnPointerOutput(bind, d->config.config().input)) {
+            const QString output = outputNameAt(KWin::effects->cursorPos());
+            if (!output.isEmpty() && readEngine().focusedOutput() != output) {
+                changeEngine().focusOutput(output);
+            }
+        }
         performAction(bind.action);
     });
     d->engine.setNativeDesktopPresentation(true);
@@ -46,6 +47,10 @@ KonveyorEffect::KonveyorEffect()
     connect(&d->memorySaveTimer, &QTimer::timeout, this, [this] { d->memoryStore.save(readEngine().windowMemory()); });
     d->pointerFocusTimer.setSingleShot(true);
     connect(&d->pointerFocusTimer, &QTimer::timeout, this, &KonveyorEffect::followPointerFocus);
+    d->edgeHoverTimer.setSingleShot(true);
+    connect(&d->edgeHoverTimer, &QTimer::timeout, this, &KonveyorEffect::switchColumnAtEdge);
+    d->peekTimer.setSingleShot(true);
+    connect(&d->peekTimer, &QTimer::timeout, this, [this] { runPeekStep(d->peekKey.delayPassed(!peekBlocked())); });
     d->startupRulesTimer.setSingleShot(true);
     d->startupRulesTimer.setTimerType(Qt::PreciseTimer);
     connect(&d->startupRulesTimer, &QTimer::timeout, this, [this] { changeEngine().refreshRules(); });
@@ -84,6 +89,7 @@ KonveyorEffect::~KonveyorEffect()
     if (d->draggedOpacity) {
         setDragFade(d->windows.windowOf(d->draggedOpacity->first), std::nullopt);
     }
+    finishPeek();
     releaseQuickTiling();
     MinimizeRule::apply(false);
     for (const KWin::ElectricBorder border : std::as_const(d->reservedCorners)) {
@@ -108,7 +114,7 @@ bool KonveyorEffect::placedBefore(KWin::Window *first, KWin::Window *second) con
 
 bool KonveyorEffect::isActive() const
 {
-    return d->animating || d->draggedOpacity || hasSpill();
+    return d->animating || d->draggedOpacity || d->decorations.paintsBorders() || hasSpill();
 }
 
 bool KonveyorEffect::blocksDirectScanout() const
@@ -150,38 +156,6 @@ bool KonveyorEffect::hasSpill() const
     return false;
 }
 
-void KonveyorEffect::prePaintWindow(KWin::RenderView *view, KWin::EffectWindow *w, KWin::WindowPrePaintData &data)
-{
-    if (spillHome(w->window()) || isDragged(w->window())) {
-        data.setTranslucent();
-    }
-    KWin::Effect::prePaintWindow(view, w, data);
-}
-
-PaintWindowResult KonveyorEffect::paintWindow(const KWin::RenderTarget &renderTarget, const KWin::RenderViewport &viewport,
-    KWin::EffectWindow *w, int mask, const KWin::Region &deviceRegion, KWin::WindowPaintData &data)
-{
-    const std::optional<QRectF> home = spillHome(w->window());
-    if (!home) {
-        return KWin::Effect::paintWindow(renderTarget, viewport, w, mask, deviceRegion, data);
-    }
-    const KWin::Region clipped = deviceRegion & viewport.mapToDeviceCoordinatesAligned(KWin::RectF(*home));
-    if (clipped.isEmpty()) {
-        return PaintWindowResult(true);
-    }
-    return KWin::Effect::paintWindow(renderTarget, viewport, w, mask, clipped, data);
-}
-
-void KonveyorEffect::prePaintScreen(KWin::ScreenPrePaintData &data)
-{
-    KWin::Effect::prePaintScreen(data);
-}
-
-void KonveyorEffect::postPaintScreen()
-{
-    KWin::Effect::postPaintScreen();
-}
-
 Layout::Engine &KonveyorEffect::changeEngine()
 {
     d->clock.clear();
@@ -199,7 +173,6 @@ void KonveyorEffect::stepAnimations()
 {
     changeEngine().tickAnimations();
     flush();
-    d->animating = readEngine().isAnimating();
     if (!d->animating) {
         d->animationTimer.stop();
     }
@@ -214,7 +187,8 @@ void KonveyorEffect::scheduleFlush()
 
 void KonveyorEffect::flush()
 {
-    const QList<Layout::WindowState> states = readEngine().windowStates();
+    QList<Layout::WindowState> states = readEngine().windowStates();
+    placePeekedWindow(states);
     const QList<Layout::WorkspaceState> workspaces = readEngine().workspaceStates();
     endMoveIntoFullscreen(states);
     updateHomeOutputs(states);
@@ -232,7 +206,7 @@ void KonveyorEffect::flush()
     d->fullscreenShade.update(states);
     applyFocusRequest();
     d->plasmaShell.update(states, d->outputs.orderedNames());
-    d->animating = readEngine().isAnimating();
+    d->animating = stepPeek() || readEngine().isAnimating();
     if (d->animating && !d->animationTimer.isActive()) {
         d->animationTimer.start();
     }
@@ -275,6 +249,12 @@ void KonveyorEffect::updateDecorations(const QList<Layout::WindowState> &states)
             d->decorations.update(window, state, home->geometryF(), home->scale());
         }
     }
+    d->decorations.syncEventEffects(states, [this](Layout::WindowId id) { return d->windows.windowOf(id); });
+    if (d->decorations.wantsViewStates()) {
+        d->decorations.updateViewSignals(readEngine().outputViewStates(), states);
+    }
+    const KWin::Window *active = KWin::workspace()->activeWindow();
+    d->inputSignals->setFullscreen(active && active->isFullScreen());
 }
 
 void KonveyorEffect::updateDropHint(const QList<Layout::WindowState> &states)
@@ -317,11 +297,18 @@ bool KonveyorEffect::isDragged(KWin::Window *window) const
 void KonveyorEffect::applyConfig(const Config::Config &config)
 {
     d->clock.applyConfig(config.animations);
+    d->decorations.setBorderStyles(config.borderStyles, config.animations.reduceMotion || !config.animations.enabled);
+    d->decorations.setAudioBeatThreshold(static_cast<float>(config.audioBeatThreshold));
+    d->inputSignals->setReduceMotion(config.animations.reduceMotion || !config.animations.enabled);
     changeEngine().setConfig(config);
     d->gestures.setConfig(config.gestures);
     d->windows.reevaluate();
     d->shortcuts.setBinds(config.binds);
     applyHotCorners(config);
+    resetEdgeHover();
+    if (!config.experiments.peekDesktop.enabled) {
+        runPeekStep(d->peekKey.reset());
+    }
     d->plasmaShell.setHideDesktopWidgets(config.hideDesktopWidgets);
     d->plasmaShell.setFillPanels(config.fillPanelsOnMaximize);
     MinimizeRule::apply(config.disableMinimize);

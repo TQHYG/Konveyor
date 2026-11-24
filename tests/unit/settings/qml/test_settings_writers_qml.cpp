@@ -71,7 +71,8 @@ void TestSettingsWritersQml::writeFlagEveryFlag_data()
     const QList<std::tuple<QString, QString, bool>> flags {
         {QString(), QStringLiteral("float-child-windows"), false},
         {QString(), QStringLiteral("always-center-single-column"), false},
-        {QString(), QStringLiteral("always-expand-single-column"), true},
+        {QString(), QStringLiteral("always-expand-single-column"), false},
+        {QString(), QStringLiteral("wrap-columns"), false},
         {QString(), QStringLiteral("remember-window-sizes"), false},
         {QString(), QStringLiteral("remember-window-positions"), false},
         {QStringLiteral("tab-indicator"), QStringLiteral("hide-when-single-tab"), false},
@@ -144,7 +145,7 @@ void TestSettingsWritersQml::flagDefaultsMatchRuntime()
             ++checked;
         }
     }
-    QCOMPARE(checked, 5);
+    QCOMPARE(checked, 6);
     const QVariantMap tab = runtime.value(QStringLiteral("tab-indicator")).toMap();
     QCOMPARE(tab.value(QStringLiteral("hide-when-single-tab")).toBool(), false);
     QCOMPARE(tab.value(QStringLiteral("place-within-column")).toBool(), false);

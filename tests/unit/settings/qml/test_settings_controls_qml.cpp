@@ -25,7 +25,8 @@ void TestSettingsControlsQml::controls_data()
     addControl("hide widgets on",
         {"PlasmaPage", "Hide desktop widgets behind windows", "switched", "[true]", "hide-desktop-widgets", R"({"args":[]})", empty});
     addControl("fill panels off",
-        {"PlasmaPage", "Stretch panels while a window is maximized", "switched", "[false]", "fill-panels-on-maximize", "null"});
+        {"PlasmaPage", "Stretch panels while a window is maximized", "switched", "[false]", "fill-panels-on-maximize", "null",
+            "fill-panels-on-maximize\n"});
     addControl("fill panels on",
         {"PlasmaPage", "Stretch panels while a window is maximized", "switched", "[true]", "fill-panels-on-maximize", R"({"args":[]})",
             empty});
@@ -42,6 +43,15 @@ void TestSettingsControlsQml::controls_data()
     addControl("keep fullscreen",
         {"ExperimentsPage", "Prevent leaving fullscreen on focus change", "switched", "[true]", "experiments/prevent-fullscreen-exit",
             R"({"args":[]})"});
+    addControl("peek on",
+        {"ExperimentsPage", "Peek at the desktop while holding Meta", "switched", "[true]", "experiments/peek-desktop",
+            R"({"children":["on"]})", "experiments {\n}\n"});
+    addControl("peek off",
+        {"ExperimentsPage", "Peek at the desktop while holding Meta", "switched", "[false]", "experiments/peek-desktop",
+            R"({"children":["delay-ms","off"]})", "experiments { peek-desktop { on; delay-ms 300; }; }\n"});
+    addControl("peek delay",
+        {"ExperimentsPage", "Hold before peeking", "edited", "[450.4]", "experiments/peek-desktop/delay-ms", R"({"args":[450]})",
+            "experiments { peek-desktop { on; }; }\n"});
     addControl("back and forth",
         {"WorkspacesPage", "Go back when switching to the current workspace", "switched", "[true]", "input/workspace-auto-back-and-forth",
             R"({"args":[]})"});
@@ -53,11 +63,17 @@ void TestSettingsControlsQml::controls_data()
     addControl("workspace quantity",
         {"WorkspacesPage", "Workspaces per monitor", "edited", "[6]", "layout/fixed-workspace-count", R"({"args":[6]})",
             "layout { fixed-workspace-count 4; }\n"});
+    addControl("wrap workspaces",
+        {"WorkspacesPage", "Wrap around at the first and last workspace", "switched", "[true]", "layout/wrap-workspaces", R"({"args":[]})",
+            "layout { fixed-workspace-count 4; }\n"});
     addControl("empty above",
         {"WorkspacesPage", "Keep an empty workspace above the first", "switched", "[true]", "layout/empty-workspace-above-first",
             R"({"args":[]})"});
     addControl(
         "focus follows", {"MousePage", "Focus follows the mouse", "switched", "[true]", "input/focus-follows-mouse", R"({"args":[]})"});
+    addControl("focus keys follow mouse",
+        {"MousePage", "Focus shortcuts act on the screen under the pointer", "switched", "[true]", "input/focus-keys-follow-mouse",
+            R"({"args":[]})"});
     addControl("warp nearest",
         {"MousePage", "Move the pointer with keyboard focus", "chosen", R"(["nearest"])", "input/warp-mouse-to-focus",
             R"({"args":[],"props":{}})"});
@@ -93,6 +109,22 @@ void TestSettingsControlsQml::controls_data()
     addControl("last corner off",
         {"MousePage", "Active corners", "toggled", R"(["top-left"])", "gestures/hot-corners", R"({"children":["top-left","off"]})",
             "gestures { hot-corners { top-left; }; }\n"});
+    addControl("edge switch on",
+        {"MousePage", "Switch columns at the screen edges", "switched", "[true]", "gestures/edge-switch-columns", R"({"children":["on"]})",
+            "gestures {\n}\n"});
+    addControl("edge switch on shipped",
+        {"MousePage", "Switch columns at the screen edges", "switched", "[true]", "gestures/edge-switch-columns",
+            R"({"children":["delay-ms","monitor-edges","on"]})",
+            "gestures { edge-switch-columns { off; delay-ms 300; monitor-edges \"outer\"; }; }\n"});
+    addControl("edge switch off",
+        {"MousePage", "Switch columns at the screen edges", "switched", "[false]", "gestures/edge-switch-columns",
+            R"({"children":["off"]})", "gestures { edge-switch-columns { on; }; }\n"});
+    addControl("edge switch delay",
+        {"MousePage", "Wait at the edge", "edited", "[450.4]", "gestures/edge-switch-columns/delay-ms", R"({"args":[450]})",
+            "gestures { edge-switch-columns { on; }; }\n"});
+    addControl("edge switch monitors",
+        {"MousePage", "Edges between monitors", "chosen", R"(["all"])", "gestures/edge-switch-columns/monitor-edges", R"({"args":["all"]})",
+            "gestures { edge-switch-columns { on; }; }\n"});
     addControl(
         "edge width", {"MousePage", "Edge width", "edited", "[40.4]", "gestures/dnd-edge-view-scroll/trigger-width", R"({"args":[40]})"});
     addControl("edge height",
@@ -146,11 +178,16 @@ void TestSettingsControlsQml::controls_data()
     addControl("center lone off",
         {"LayoutPage", "Center a lone window", "switched", "[false]", "layout/always-center-single-column", "null",
             "layout { always-center-single-column; }\n"});
-    addControl("expand lone off",
-        {"LayoutPage", "Expand a lone window", "switched", "[false]", "layout/always-expand-single-column", R"({"args":[false]})"});
+    addControl("wrap columns on",
+        {"LayoutPage", "Scroll around past the last column", "switched", "[true]", "layout/wrap-columns", R"({"args":[]})"});
+    addControl("wrap columns off",
+        {"LayoutPage", "Scroll around past the last column", "switched", "[false]", "layout/wrap-columns", R"({"args":[false]})",
+            "layout { wrap-columns; }\n"});
     addControl("expand lone on",
-        {"LayoutPage", "Expand a lone window", "switched", "[true]", "layout/always-expand-single-column", R"({"args":[true]})",
-            "layout { always-expand-single-column false; }\n"});
+        {"LayoutPage", "Expand a lone window", "switched", "[true]", "layout/always-expand-single-column", R"({"args":[]})"});
+    addControl("expand lone off",
+        {"LayoutPage", "Expand a lone window", "switched", "[false]", "layout/always-expand-single-column", R"({"args":[false]})",
+            "layout { always-expand-single-column; }\n"});
     addControl(
         "remember sizes", {"LayoutPage", "Remember window sizes", "switched", "[true]", "layout/remember-window-sizes", R"({"args":[]})"});
     addControl("forget sizes",
@@ -160,14 +197,15 @@ void TestSettingsControlsQml::controls_data()
         {"LayoutPage", "Remember floating window positions", "switched", "[true]", "layout/remember-window-positions", R"({"args":[]})"});
     addControl("reset gaps", {"LayoutPage", "Gaps", "resetRequested", "[]", "layout/gaps", R"({"args":[16]})", "layout { gaps 3; }\n"});
     addControl("reset expand",
-        {"LayoutPage", "Expand a lone window", "resetRequested", "[]", "layout/always-expand-single-column", R"({"args":[true]})",
-            "layout { always-expand-single-column false; }\n"});
+        {"LayoutPage", "Expand a lone window", "resetRequested", "[]", "layout/always-expand-single-column", R"({"args":[false]})",
+            "layout { always-expand-single-column; }\n"});
     addControl(
         "reset animations", {"MotionPage", "Animate windows", "resetRequested", "[]", "animations/off", "null", "animations { off; }\n"});
     addControl("reset widgets",
         {"PlasmaPage", "Hide desktop widgets behind windows", "resetRequested", "[]", "hide-desktop-widgets", R"({"args":[]})", ""});
     addControl("reset ring",
-        {"LookPage", "Show focus ring", "resetRequested", "[]", "layout/focus-ring/off", "null", "layout { focus-ring { off; }; }\n"});
+        {"AppearancePage", "Show focus ring", "resetRequested", "[]", "layout/focus-ring/off", "null",
+            "layout { focus-ring { off; }; }\n"});
     addControl("reset corners",
         {"MousePage", "Active corners", "resetRequested", "[]", "gestures/hot-corners", R"({"children":["off"]})",
             "gestures { hot-corners { top-right; }; }\n"});

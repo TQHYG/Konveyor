@@ -59,8 +59,6 @@ public:
     WindowId id() const { return m_window.id(); }
     const OptionsPtr &options() const { return m_options; }
     const Anim::Clock &clock() const { return m_clock; }
-    double scale() const { return m_scale; }
-    QSizeF viewSize() const { return m_viewSize; }
 
     QPointF animationOffset() const;
     void animateOpening();
@@ -77,7 +75,6 @@ public:
     void fadeOpacity(double from, double to, const Config::AnimationParams &config);
     void ensureFadesToOpaque();
     void keepFadeAfterFinish();
-    const std::optional<FadeAnimation> &alphaAnimation() const { return m_alphaAnimation; }
     double alpha() const;
 
     WindowMode sizingMode() const { return m_sizingMode; }
@@ -98,7 +95,7 @@ public:
 
     void requestOuterSize(QSizeF size, bool animate);
     void requestMaximized(QSizeF size, bool animate);
-    void clearWindowedFullscreenFallback();
+    void clearLockedOutputCover();
     void requestFullscreen(bool animate);
     double outerWidthFor(double size) const;
     ColumnWidth columnWidthFor(const Config::PresetSize &preset) const;
@@ -109,7 +106,7 @@ public:
     QSizeF maxNormalSize() const;
 
     bool returnsToFloating = false;
-    bool isWindowedFullscreenFallback = false;
+    bool coversLockedOutput = false;
     std::optional<QSize> savedFloatingSize;
     std::optional<QPointF> savedFloatingPosition;
     std::optional<std::size_t> floatingWidthPresetIndex;

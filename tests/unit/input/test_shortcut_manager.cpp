@@ -1,22 +1,16 @@
-#include "../dbus/fakekglobalaccel.h"
-#include "config/loader.h"
-#include "input/shortcutmanager.h"
+#include "shortcutmanagerfixture.h"
 
 #include <QAction>
 #include <QTest>
 
-#include <xkbcommon/xkbcommon.h>
-
-#include <memory>
-
-using Konveyor::ShortcutManager;
 using Konveyor::Config::BindModifier;
 using Konveyor::Config::BindModifiers;
 using Konveyor::Config::BindTrigger;
 using Konveyor::Config::MouseButton;
 using Konveyor::Config::ScrollDirection;
+using Konveyor::Test::binds;
 using Konveyor::Test::FakeKGlobalAccel;
-using Konveyor::Test::PrivateSession;
+using Konveyor::Test::ShortcutManagerFixture;
 
 namespace
 {
@@ -28,20 +22,9 @@ constexpr quint32 keycodeY = 29;
 constexpr quint32 keycodeZ = 52;
 const QStringList overview {QStringLiteral("kwin"), QStringLiteral("Overview"), QStringLiteral("KWin"), QStringLiteral("Toggle Overview")};
 
-QList<Konveyor::Config::Bind> binds(const QString &body, const QString &input = QString())
-{
-    const auto loaded
-        = Konveyor::Config::loadString(input + QStringLiteral("binds {\n") + body + QStringLiteral("\n}\n"), QStringLiteral("config.kdl"));
-    if (!loaded) {
-        qWarning() << loaded.error().toString();
-        return {};
-    }
-    return loaded->config.binds;
 }
 
-}
-
-class TestShortcutManager : public QObject
+class TestShortcutManager : public ShortcutManagerFixture
 {
     Q_OBJECT
 
@@ -52,45 +35,10 @@ public:
         qputenv("DBUS_SESSION_BUS_ADDRESS", "unix:path=/nonexistent/konveyor-test-bus");
     }
 
-private:
-    std::unique_ptr<PrivateSession> m_session;
-    std::unique_ptr<FakeKGlobalAccel> m_fake;
-    xkb_context *m_context = nullptr;
-    QStringList m_fired;
-
-    std::unique_ptr<ShortcutManager> manager()
-    {
-        m_fired.clear();
-        return std::make_unique<ShortcutManager>([this](const Konveyor::Config::Bind &bind) {
-            m_fired.append(Konveyor::Config::bindKeyLabel(bind) + QLatin1Char(' ') + bind.action.name);
-        });
-    }
-
-    xkb_keymap *keymap(const char *layout)
-    {
-        const xkb_rule_names names {"evdev", "pc105", layout, "", ""};
-        return xkb_keymap_new_from_names(m_context, &names, XKB_KEYMAP_COMPILE_NO_FLAGS);
-    }
-
-    QList<QKeySequence> keys(const QString &action) const { return m_fake->keys(QStringLiteral("konveyor"), action); }
-
 private Q_SLOTS:
-    void initTestCase()
-    {
-        m_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-        QVERIFY(m_context);
-        m_session = std::make_unique<PrivateSession>();
-        QVERIFY(m_session->start());
-        m_fake = std::make_unique<FakeKGlobalAccel>();
-        QVERIFY(m_fake->start(m_session->address()));
-    }
+    void initTestCase() { QVERIFY(startFake()); }
 
-    void cleanupTestCase()
-    {
-        xkb_context_unref(m_context);
-        m_fake.reset();
-        m_session.reset();
-    }
+    void cleanupTestCase() { stopFake(); }
 
     void registersEveryKeyBindWithKde()
     {
@@ -156,6 +104,46 @@ private Q_SLOTS:
         QCOMPARE(shortcuts->findChildren<QAction *>().size(), 2);
         shortcuts->findChild<QAction *>(QStringLiteral("konveyor-Super+Ctrl+1"))->trigger();
         QCOMPARE(m_fired, QStringList {QStringLiteral("Super+Ctrl+1 move-column-to-workspace")});
+    }
+
+    void bindsDifferingInCooldownOrTitleStaySeparate()
+    {
+        auto shortcuts = manager();
+        shortcuts->setBinds(binds(QStringLiteral("Mod+H cooldown-ms=5 { focus-column-left; }\n"
+                                                 "Mod+Left cooldown-ms=9 { focus-column-left; }\n"
+                                                 "Mod+J hotkey-overlay-title=\"One\" { focus-window-down; }\n"
+                                                 "Mod+Down hotkey-overlay-title=\"Two\" { focus-window-down; }")));
+        QCOMPARE(shortcuts->findChildren<QAction *>().size(), 4);
+    }
+
+    void keysWithoutAQtKeyStayOutOfKde()
+    {
+        auto shortcuts = manager();
+        shortcuts->setBinds(binds(QStringLiteral("Mod+Pointer_Left { focus-column-left; }\nMod+H { focus-column-right; }")));
+        QCOMPARE(shortcuts->findChildren<QAction *>().size(), 1);
+        QVERIFY(!shortcuts->findChild<QAction *>(QStringLiteral("konveyor-Super+Pointer_Left")));
+    }
+
+    void settingTheSameBindsAgainKeepsTheRegisteredActions()
+    {
+        auto shortcuts = manager();
+        const auto list = binds(QStringLiteral("Mod+H { focus-column-left; }"));
+        shortcuts->setBinds(list);
+        const auto *before = shortcuts->findChild<QAction *>(QStringLiteral("konveyor-Super+H"));
+        shortcuts->setBinds(list);
+        QCOMPARE(shortcuts->findChild<QAction *>(QStringLiteral("konveyor-Super+H")), before);
+        QCOMPARE(shortcuts->findChildren<QAction *>().size(), 1);
+    }
+
+    void aKeyTakenByTwoDifferentActionsRegistersOnlyTheFirst()
+    {
+        auto shortcuts = manager();
+        const auto list = binds(QStringLiteral("Mod+H { focus-column-left; }")) + binds(QStringLiteral("Mod+H { focus-column-right; }"));
+        QCOMPARE(list.size(), 2);
+        shortcuts->setBinds(list);
+        QCOMPARE(shortcuts->findChildren<QAction *>().size(), 1);
+        shortcuts->findChild<QAction *>(QStringLiteral("konveyor-Super+H"))->trigger();
+        QCOMPARE(m_fired, QStringList {QStringLiteral("Super+H focus-column-left")});
     }
 
     void leavesIsoLevelBindsOutOfKde()

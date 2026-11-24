@@ -23,6 +23,12 @@ struct LoadContext
 };
 
 BorderRule decodeBorderRule(const Kdl::Node &node);
+void decodeBorderStyle(LoadContext &context, const Kdl::Node &node);
+LayerDrive decodeLayerDrive(const Kdl::Node &node);
+QList<Signal> decodeFireOn(const Kdl::Node &node);
+EventEffects decodeEventEffects(const Kdl::Node &node);
+void mergeEventEffects(EventEffects &base, const EventEffects &part);
+void warnAboutUnknownBorderStyles(LoadContext &context);
 TabIndicatorPart decodeTabIndicatorPart(const Kdl::Node &node);
 InsertHintPart decodeInsertHintPart(const Kdl::Node &node);
 Struts decodeStruts(const Kdl::Node &node);
@@ -40,6 +46,7 @@ Animations defaultAnimations();
 void decodeAnimations(const Kdl::Node &node, Animations &animations);
 void decodeGestures(const Kdl::Node &node, Gestures &gestures);
 void decodeInput(const Kdl::Node &node, Input &input);
+void decodePeekDesktop(const Kdl::Node &node, PeekDesktop &peek);
 void decodeOutput(LoadContext &context, const Kdl::Node &node);
 void decodeMonitorProfile(LoadContext &context, const Kdl::Node &node);
 void decodeWorkspace(LoadContext &context, const Kdl::Node &node);

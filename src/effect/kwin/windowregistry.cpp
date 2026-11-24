@@ -7,6 +7,7 @@
 #include <x11window.h>
 
 #include <algorithm>
+#include <climits>
 #include <memory>
 #include <ranges>
 #include <utility>
@@ -16,6 +17,13 @@ namespace Konveyor
 
 namespace
 {
+
+QSizeF frameLimit(KWin::Window *window, const QSizeF &clientLimit)
+{
+    const QSizeF frame = window->clientSizeToFrameSize(clientLimit);
+    return QSizeF(clientLimit.width() >= INT_MAX ? clientLimit.width() : frame.width(),
+        clientLimit.height() >= INT_MAX ? clientLimit.height() : frame.height());
+}
 
 QString appIdOf(KWin::Window *window)
 {
@@ -39,11 +47,15 @@ struct WindowRegistry::WindowSignalState
 
 WindowRegistry::WindowRegistry(QObject *parent)
     : QObject(parent)
-    , KWin::X11EventFilter(QList<int> {XCB_PROPERTY_NOTIFY})
+    , KWin::X11EventFilter(QList<int> {XCB_PROPERTY_NOTIFY, XCB_CONFIGURE_REQUEST})
 { }
 
 bool WindowRegistry::event(xcb_generic_event_t *genericEvent)
 {
+    if ((genericEvent->response_type & 0x7FU) == XCB_CONFIGURE_REQUEST) {
+        announceRequestedSize(*reinterpret_cast<xcb_configure_request_event_t *>(genericEvent));
+        return false;
+    }
     const auto *event = reinterpret_cast<xcb_property_notify_event_t *>(genericEvent);
     if (event->atom != XCB_ATOM_WM_NORMAL_HINTS) {
         return false;
@@ -61,6 +73,20 @@ bool WindowRegistry::event(xcb_generic_event_t *genericEvent)
         },
         Qt::QueuedConnection);
     return false;
+}
+
+void WindowRegistry::announceRequestedSize(const xcb_configure_request_event_t &request)
+{
+    constexpr uint32_t sizeMask = XCB_CONFIG_WINDOW_WIDTH | XCB_CONFIG_WINDOW_HEIGHT;
+    KWin::X11Window *window = KWin::workspace()->findClient(request.window);
+    const auto id = window ? idOf(window) : std::nullopt;
+    if (!id || !(request.value_mask & sizeMask)) {
+        return;
+    }
+    const QSizeF current = window->clientSize();
+    const QSizeF client((request.value_mask & XCB_CONFIG_WINDOW_WIDTH) ? request.width : current.width(),
+        (request.value_mask & XCB_CONFIG_WINDOW_HEIGHT) ? request.height : current.height());
+    Q_EMIT clientRequestedSize(*id, window->clientSizeToFrameSize(client));
 }
 
 void WindowRegistry::start(const std::function<bool(KWin::Window *, KWin::Window *)> &adoptionOrder)
@@ -98,8 +124,8 @@ Layout::WindowProperties WindowRegistry::propertiesOf(KWin::Window *window) cons
     Layout::WindowProperties properties;
     properties.appId = appIdOf(window);
     properties.title = window->caption();
-    properties.minSize = window->minSize();
-    properties.maxSize = window->maxSize();
+    properties.minSize = frameLimit(window, window->minSize());
+    properties.maxSize = frameLimit(window, window->maxSize());
     properties.parent = window->transientFor() ? idOf(window->transientFor()) : std::nullopt;
     properties.isUrgent = window->isDemandingAttention();
     properties.isDialog = window->isDialog() || window->isModal();

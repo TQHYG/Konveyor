@@ -1,6 +1,7 @@
 #include "layout/engine/engineprivate.h"
 
 #include "config/log.h"
+#include "layout/common/geometry.h"
 
 #include <cmath>
 
@@ -24,19 +25,34 @@ bool Engine::Private::isLockedToOutputSize(WindowId id)
     return std::abs(properties.minSize.width() - screen.width()) < 1.0 && std::abs(properties.minSize.height() - screen.height()) < 1.0;
 }
 
-void Engine::Private::floatOverOutput(WindowId id)
+void Engine::Private::presentOverOutput(WindowId id)
 {
     Workspace *workspace = workspaceOf(id);
     const Monitor *monitor = monitorOf(id);
     if (!workspace || !monitor) {
         return;
     }
-    const QRectF screen = outputInfos.value(monitor->outputName()).geometry;
-    qCInfo(lcKonveyor) << "konveyor: window" << id << "is locked to the size of" << monitor->outputName() << "so it floats over" << screen;
-    if (!workspace->isFloating(id)) {
-        workspace->placeWindowFloating(id, true);
+    qCInfo(lcKonveyor) << "konveyor: window" << id << "is locked to the size of" << monitor->outputName()
+                       << "so it covers it in its column";
+    workspace->setFullscreen(id, true);
+    Tile *tile = workspace->tileFor(id);
+    tile->coversLockedOutput = true;
+    tile->window().requestWindowedFullscreen(true);
+}
+
+void Engine::setWindowNativeSize(WindowId id, const QSizeF &frameSize)
+{
+    Tile *tile = d->tileOf(id);
+    if (!tile) {
+        return;
     }
-    setFloatingFrame(id, screen);
+    tile->window().setNativeSize(roundedSize(frameSize));
+    if (Workspace *workspace = d->workspaceOf(id)) {
+        workspace->updateWindow(id);
+    } else {
+        tile->updateWindow();
+    }
+    d->refresh();
 }
 
 }

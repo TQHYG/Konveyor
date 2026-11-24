@@ -100,13 +100,16 @@ Item {
                 return -1
             }
             readonly property int cpuMetricMatch: metricMatch(root.cpuMetrics)
-            readonly property int gpuMetricMatch: metricMatch(root.gpuMetrics)
+            readonly property int gpuMetricMatch: metricMatch(root.gpuShown)
             readonly property bool cpuMatch: cpuMetricMatch >= 0 || matchesWords(["cpu", "processor", root.cpuShort().toLowerCase()])
             readonly property bool coresMatch: Plasmoid.configuration.showPerCore && (query === "" || coreQuery !== null || matchesWords(["cores", "threads", "p-core", "e-core"]))
             readonly property bool gpuMatch: root.gpu !== null && Plasmoid.configuration.showGpu
                                              && (gpuMetricMatch >= 0 || matchesWords(["gpu", "graphics", "vram", "video", "memory clock", root.gpuShort(root.gpu ? root.gpu.name : "").toLowerCase()]))
             readonly property bool memMatch: matchesWords(["memory", "ram", "swap"])
-            readonly property var matchedCards: [cpuMatch ? cpuCard : null, coresMatch ? coresCard : null, gpuMatch ? gpuCard : null, memMatch ? memCard : null].filter(card => card !== null)
+            readonly property int netMetricMatch: metricMatch(root.netMetrics)
+            readonly property bool netMatch: root.net !== null && Plasmoid.configuration.showNet
+                                             && (netMetricMatch >= 0 || matchesWords(["network", "net", "throughput", "bandwidth"].concat(root.net ? root.net.ifaces || [] : [])))
+            readonly property var matchedCards: [cpuMatch ? cpuCard : null, coresMatch ? coresCard : null, gpuMatch ? gpuCard : null, memMatch ? memCard : null, netMatch ? netCard : null].filter(card => card !== null)
 
             anchors.fill: parent
             icon: root.panelIcon
@@ -121,7 +124,7 @@ Item {
             }
             statusColor: root.collectorAlive ? Kirigami.Theme.positiveTextColor : Kirigami.Theme.disabledTextColor
             statusText: root.collectorAlive ? i18n("Live") : i18n("Collector stopped")
-            searchPlaceholder: i18n("Search CPU, cores, GPU, memory…")
+            searchPlaceholder: i18n("Search CPU, cores, GPU, memory, network…")
             matchCount: query === "" ? -1 : matchedCards.length
             onSearchAccepted: if (matchedCards.length > 0) scroll.scrollTo(matchedCards[0])
             onCloseRequested: if (full.overlayMode) full.overlayCloseRequested(); else root.expanded = false
@@ -167,7 +170,7 @@ Item {
                 visible: !!root.snap.cpu && shell.query !== "" && shell.matchedCards.length === 0
                 iconName: "edit-find"
                 text: i18n("No matches")
-                explanation: i18n("Try cpu, temp, core 3, gpu, vram or swap")
+                explanation: i18n("Try cpu, temp, core 3, gpu, vram, swap or upload")
             }
 
             PopScroll {
@@ -195,7 +198,7 @@ Item {
                         visible: root.gpu !== null && Plasmoid.configuration.showGpu
                         value: root.gpu ? root.gpu.util || 0 : 0
                         label: i18n("GPU")
-                        caption: root.gpu ? Fmt.temp(root.gpu.temp) + " · " + Math.round(root.gpu.power || 0) + " W" : ""
+                        caption: root.gpu ? root.gpuDetails() : ""
                         color: Style.heatStrong(root.gpu ? root.gpu.util || 0 : 0, 60, 85, Kirigami.Theme)
                         onClicked: { scroll.scrollTo(gpuCard); gpuCard.flash() }
                     }
@@ -296,37 +299,40 @@ Item {
 
                     PopMetricTabs {
                         id: gpuTabs
-                        metrics: root.gpuMetrics
+                        metrics: root.gpuShown
                         source: root.gpu || ({})
                         tick: root.tick
                         valuesFor: key => root.series("gpu." + key)
                         chartVisible: Plasmoid.configuration.showCharts
-                        selected: shell.gpuMetricMatch >= 0 ? shell.gpuMetricMatch : Plasmoid.configuration.gpuTab
+                        selected: shell.gpuMetricMatch >= 0 ? shell.gpuMetricMatch : Math.max(0, Math.min(Plasmoid.configuration.gpuTab, root.gpuShown.length - 1))
                         onUserSelected: index => Plasmoid.configuration.gpuTab = index
                     }
                     PopBar {
                         Layout.fillWidth: true
-                        label: i18n("VRAM")
+                        visible: root.gpu !== null && root.gpu.vram_total > 0
+                        label: root.gpu && root.gpu.shared ? i18n("GPU memory") : i18n("VRAM")
                         value: root.gpu ? root.gpu.vram_pct || 0 : 0
                         valueText: root.gpu ? Style.bytes(root.gpu.vram_used) + " / " + Style.bytes(root.gpu.vram_total) : ""
                         color: (root.gpu ? root.gpu.vram_pct || 0 : 0) >= 75 ? Style.heatStrong(root.gpu.vram_pct, 75, 90, Kirigami.Theme) : Style.hue("memory", Kirigami.Theme)
                     }
                     RowLayout {
                         Layout.fillWidth: true
+                        visible: gpuStats.count > 0
                         spacing: 0
                         Repeater {
+                            id: gpuStats
                             model: root.gpu ? [
                                 { label: i18n("Memory clock"), value: Math.round(root.gpu.clock_mem || 0), unit: "MHz" },
                                 { label: i18n("Power limit"), value: Math.round(root.gpu.power_max || 0), unit: "W" },
                                 { label: i18n("Max clock"), value: Math.round(root.gpu.clock_max || 0), unit: "MHz" }
-                            ] : []
+                            ].filter(stat => stat.value > 0) : []
                             PopStat {
                                 required property var modelData
                                 Layout.fillWidth: true
                                 Layout.preferredWidth: 1
                                 label: modelData.label
-                                value: modelData.value > 0 ? modelData.value + "" : "—"
-                                unit: modelData.value > 0 ? modelData.unit : ""
+                                value: modelData.value + ""
+                                unit: modelData.unit
                                 scale: 1.0
                             }
                         }
@@ -368,6 +374,10 @@ Item {
                         valueText: Style.bytes(root.mem.swap_used) + " / " + Style.bytes(root.mem.swap_total)
                         color: Style.hue("memory", Kirigami.Theme)
                     }
+                }
+
+                NetCard {
+                    id: netCard
                 }
 
                 PlasmaComponents.Label {

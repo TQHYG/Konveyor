@@ -22,6 +22,7 @@ private Q_SLOTS:
     void mergedLayoutUnsetsWithFalseFlag();
     void mergedLayoutRestoresEmptyPresets();
     void keysymLookup();
+    void screensaverKeysymsKeepTheirCase();
     void loadErrorFormatting();
 };
 
@@ -37,10 +38,12 @@ void TestConfigDefaults::defaultLayoutValues()
     QCOMPARE(layout.gaps, 16.0);
     QCOMPARE(layout.centerFocusedColumn, CenterFocusedColumn::Never);
     QCOMPARE(layout.alwaysCenterSingleColumn, false);
-    QCOMPARE(layout.alwaysExpandSingleColumn, true);
+    QCOMPARE(layout.wrapColumns, false);
+    QCOMPARE(layout.alwaysExpandSingleColumn, false);
     QCOMPARE(layout.emptyWorkspaceAboveFirst, false);
     QCOMPARE(layout.fixedWorkspaceCount, 0);
     QCOMPARE(layout.horizontalDesktops, false);
+    QCOMPARE(layout.wrapWorkspaces, false);
     QCOMPARE(layout.defaultColumnDisplay, ColumnDisplay::Normal);
     QCOMPARE(layout.presetColumnWidths.size(), 4);
     QCOMPARE(proportionOf(layout.presetColumnWidths.at(0)), 0.25);
@@ -66,9 +69,9 @@ void TestConfigDefaults::defaultAppearanceValues()
 {
     const Layout layout = defaultConfig().layout;
     QCOMPARE(layout.focusRing.enabled, true);
-    QCOMPARE(layout.focusRing.width, 4.0);
+    QCOMPARE(layout.focusRing.width, 2.0);
     QCOMPARE(layout.focusRing.active.color, QColor(127, 200, 255));
-    QCOMPARE(layout.focusRing.inactive.color, QColor(80, 80, 80));
+    QVERIFY(!layout.focusRing.inactive.isSet());
     QCOMPARE(layout.focusRing.urgent.color, QColor(155, 0, 0));
     QCOMPARE(layout.border.enabled, false);
     QCOMPARE(layout.border.width, 4.0);
@@ -111,6 +114,7 @@ void TestConfigDefaults::defaultGestureAndInputValues()
     QCOMPARE(config.input.focusFollowsMouse, false);
     QCOMPARE(config.input.warpMouseToFocus, false);
     QCOMPARE(config.input.workspaceAutoBackAndForth, false);
+    QCOMPARE(config.input.focusKeysFollowMouse, false);
     QCOMPARE(config.input.modKey, QStringLiteral("Super"));
     QCOMPARE(config.configNotificationDisableFailed, false);
 }
@@ -127,7 +131,7 @@ void TestConfigDefaults::defaultDecorationDetails()
     QCOMPARE(layout.tabIndicator.gapsBetweenTabs, 0.0);
     QCOMPARE(layout.tabIndicator.cornerRadius, 0.0);
     QCOMPARE(layout.tabIndicator.active, std::nullopt);
-    QCOMPARE(layout.tabIndicator.inactive, std::nullopt);
+    QCOMPARE(layout.tabIndicator.inactive.color, QColor(80, 80, 80));
     QCOMPARE(layout.tabIndicator.urgent, std::nullopt);
     QCOMPARE(layout.insertHint.paint.gradient, std::nullopt);
 }
@@ -194,7 +198,7 @@ void TestConfigDefaults::mergedLayoutAppliesPart()
     QCOMPARE(merged.struts, (Struts {1, 2, 3, 4}));
     QCOMPARE(merged.border.enabled, true);
     QCOMPARE(merged.border.width, 9.0);
-    QCOMPARE(merged.focusRing.width, 4.0);
+    QCOMPARE(merged.focusRing.width, 2.0);
 }
 
 void TestConfigDefaults::mergedLayoutUnsetsWithFalseFlag()
@@ -233,6 +237,13 @@ void TestConfigDefaults::keysymLookup()
     QVERIFY(keysymFromName(QStringLiteral("Page_Down")) != 0);
     QVERIFY(keysymFromName(QStringLiteral("XF86AudioRaiseVolume")) != 0);
     QCOMPARE(keysymFromName(QStringLiteral("NotAKeyAtAll")), 0u);
+}
+
+void TestConfigDefaults::screensaverKeysymsKeepTheirCase()
+{
+    QCOMPARE(keysymFromName(QStringLiteral("XF86ScreenSaver")), 0x1008ff2du);
+    QCOMPARE(keysymFromName(QStringLiteral("XF86Screensaver")), 0x10081245u);
+    QCOMPARE(keysymFromName(QStringLiteral("xf86screensaver")), 0x1008ff2du);
 }
 
 void TestConfigDefaults::loadErrorFormatting()

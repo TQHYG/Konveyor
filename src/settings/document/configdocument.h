@@ -7,6 +7,7 @@
 #include <QVariantMap>
 
 #include <expected>
+#include <optional>
 #include <string>
 #include <utility>
 

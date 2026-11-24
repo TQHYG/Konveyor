@@ -24,7 +24,7 @@ void Engine::Private::refresh()
     followWindowsOnAllDesktops();
     for (Workspace *workspace : allWorkspaces()) {
         for (const TileRef &ref : workspace->renderedTilesMut(false)) {
-            if (ref.tile->isWindowedFullscreenFallback && !isLockedToOutputSize(ref.tile->id())) {
+            if (ref.tile->coversLockedOutput && !isLockedToOutputSize(ref.tile->id())) {
                 workspace->setFullscreen(ref.tile->id(), false);
             }
         }
@@ -54,7 +54,6 @@ void Engine::Private::updateFocus()
             const bool isFocused = focused && *focused == window.id();
             window.setFocused(isFocused);
             if (isFocused) {
-                window.setFocusTimestamp(clock.now());
                 focusOrder.insert(window.id(), ++focusCounter);
             }
         }

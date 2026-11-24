@@ -1,3 +1,4 @@
+import functools
 import hashlib
 import json
 import os
@@ -18,7 +19,7 @@ import state
 
 STUBS = ("sudo", "runuser", "systemctl", "systemd-run", "busctl", "gdbus", "kwriteconfig6", "kreadconfig6", "kpackagetool6",
          "kbuildsycoca6", "cmake", "konveyor-kontrol-panel", "konveyor", "toolbox", "distrobox", "podman", "rpm", "dpkg", "id",
-         "getent", "date", "sleep", "journalctl", "kscreen-doctor", "jq", "ssh", "curl")
+         "getent", "date", "ldd", "sleep", "journalctl", "kscreen-doctor", "jq", "ssh", "curl")
 MANAGERS = ("pacman", "dnf", "zypper", "apt-get")
 TOOLS = ("bash", "sh", "cat", "cp", "mv", "rm", "rmdir", "mkdir", "ln", "chmod", "find", "sed", "grep", "sort", "comm", "basename",
          "dirname", "tee", "install", "touch", "head", "cut", "tr", "awk", "join", "xargs", "sha256sum", "readlink", "env", "mktemp",
@@ -30,6 +31,13 @@ OS_RELEASE = {
 }
 NOBODY = 65534
 KWIN = "6.7.0"
+
+
+@functools.cache
+def can_fake_root():
+    return subprocess.run([shutil.which("unshare"), "--user", "--map-root-user", "--", "true"], capture_output=True).returncode == 0
+
+
 SOURCE_FUNCTIONS = """
 set -euo pipefail
 source "$1"
@@ -169,6 +177,8 @@ class Harness:
     def run(self, *command, root=False, env=None):
         wrapper = []
         if root and os.geteuid() != 0:
+            if not can_fake_root():
+                raise unittest.SkipTest("cannot fake root: unprivileged user namespaces are unavailable")
             wrapper = [shutil.which("unshare"), "--user", "--map-root-user", "--"]
         if not root and os.geteuid() == 0:
             for path in [self.root, *self.root.rglob("*")]:

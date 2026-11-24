@@ -81,7 +81,7 @@ private Q_SLOTS:
             {QStringLiteral("ping"), QStringLiteral("clients"), QStringLiteral("blocked"), QStringLiteral("none")});
         addSwitches("sysmon",
             {QStringLiteral("compactShowCpu"), QStringLiteral("compactShowGpu"), QStringLiteral("compactShowRam"),
-                QStringLiteral("compactShowTemps"), QStringLiteral("panelShrink")});
+                QStringLiteral("compactShowNet"), QStringLiteral("compactShowTemps"), QStringLiteral("panelShrink")});
         addSwitches("procmon",
             {QStringLiteral("compactShowCpu"), QStringLiteral("compactShowGpu"), QStringLiteral("compactShowFps"),
                 QStringLiteral("panelShrink")});
@@ -105,6 +105,34 @@ private Q_SLOTS:
         QTRY_VERIFY(
             !visibleTexts(compact).join(QString()).isEmpty() || config.value(QStringLiteral("panelDetail")) == QLatin1String("tiny"));
         QVERIFY2(PlasmoidHarness::messages().isEmpty(), qPrintable(PlasmoidHarness::report()));
+        QFile::remove(wanted.path);
+    }
+    void widthIsMeasuredAgainWhenDataArrives_data()
+    {
+        QTest::addColumn<QString>("name");
+        for (const char *name : {"sysmon", "procmon", "routermon"}) {
+            QTest::newRow(name) << QString::fromLatin1(name);
+        }
+    }
+
+    void widthIsMeasuredAgainWhenDataArrives()
+    {
+        QFETCH(QString, name);
+        const Panel wanted = panel(name);
+        PlasmoidHarness harness(wanted.spec);
+        QObject *root = harness.load(Form::Horizontal, {});
+        QVERIFY2(root, qPrintable(harness.error));
+        QQuickItem *compact = harness.show("compactRepresentation");
+        QVERIFY(compact);
+        compact->setSize(QSizeF(1200, 40));
+        harness.resolveRuntime(QStringLiteral("printf %s"));
+        const QList<QObject *> probes = findByType(compact, "PanelWidthProbe");
+        QCOMPARE(probes.size(), 1);
+        QObject *probe = probes.first();
+        QTRY_VERIFY(!probe->property("probing").toBool());
+        const double empty = probe->property("settled").toDouble();
+        QVERIFY(harness.deliver(wanted.path, wanted.snapshot, [&] { return root->property(wanted.arrived).toBool(); }));
+        QTRY_VERIFY(probe->property("settledSpan").toDouble() > empty);
         QFile::remove(wanted.path);
     }
 };

@@ -38,6 +38,7 @@ QVariantMap animationValue(const Config::AnimationParams &params)
 void insertAnimations(QVariantMap &values, const Config::Animations &animations)
 {
     values.insert(QStringLiteral("animations/enabled"), animations.enabled);
+    values.insert(QStringLiteral("animations/reduce-motion"), animations.reduceMotion);
     values.insert(QStringLiteral("animations/slowdown"), animations.slowdown);
     const QList<std::pair<QString, const Config::AnimationParams *>> entries {
         {QStringLiteral("workspace-switch"), &animations.workspaceSwitch},
@@ -98,11 +99,15 @@ QVariantMap globalValues(const Config::Config &config)
         {QStringLiteral("disable-minimize"), config.disableMinimize},
         {QStringLiteral("experiments/prevent-fullscreen-minimize"), config.experiments.preventFullscreenMinimize},
         {QStringLiteral("experiments/prevent-fullscreen-exit"), config.experiments.preventFullscreenExit},
+        {QStringLiteral("experiments/peek-desktop"),
+            QVariantMap {{QStringLiteral("enabled"), config.experiments.peekDesktop.enabled},
+                {QStringLiteral("delay-ms"), config.experiments.peekDesktop.delayMs}}},
         {QStringLiteral("config-notification/disable-failed"), config.configNotificationDisableFailed},
         {QStringLiteral("input/focus-follows-mouse"), input.focusFollowsMouse},
         {QStringLiteral("input/warp-mouse-to-focus"), input.warpMouseToFocus},
         {QStringLiteral("input/warp-mouse-to-focus/mode"), warpModes.at(static_cast<qsizetype>(input.warpMouseMode))},
         {QStringLiteral("input/workspace-auto-back-and-forth"), input.workspaceAutoBackAndForth},
+        {QStringLiteral("input/focus-keys-follow-mouse"), input.focusKeysFollowMouse},
         {QStringLiteral("input/mod-key"), input.modKey},
         {QStringLiteral("gestures/dnd-edge-view-scroll"), edgeScrollValue(gestures.dndEdgeViewScroll)},
         {QStringLiteral("gestures/dnd-edge-workspace-switch"), edgeScrollValue(gestures.dndEdgeWorkspaceSwitch)},
@@ -114,6 +119,14 @@ QVariantMap globalValues(const Config::Config &config)
                 {QStringLiteral("bottom-left"), gestures.hotCorners.bottomLeft},
                 {QStringLiteral("bottom-right"), gestures.hotCorners.bottomRight},
             }},
+        {QStringLiteral("gestures/edge-switch-columns"),
+            QVariantMap {
+                {QStringLiteral("enabled"), gestures.edgeSwitchColumns.enabled},
+                {QStringLiteral("delay-ms"), gestures.edgeSwitchColumns.delayMs},
+                {QStringLiteral("monitor-edges"),
+                    gestures.edgeSwitchColumns.monitorEdges == Config::EdgeSwitchMonitorEdges::All ? QStringLiteral("all")
+                                                                                                   : QStringLiteral("outer")},
+            }},
         {QStringLiteral("gestures/touchpad"), multiTouchValue(gestures.touchpad)},
         {QStringLiteral("gestures/touchscreen"), multiTouchValue(gestures.touchscreen)},
         {QStringLiteral("gestures/resize-tiled-windows"), gestures.resizeTiledWindows},
@@ -121,6 +134,7 @@ QVariantMap globalValues(const Config::Config &config)
             gestures.titlebarDrag == Config::TitlebarDrag::MoveWindow ? QStringLiteral("move-window") : QStringLiteral("scroll-view")},
     };
     insertAnimations(values, config.animations);
+    values.insert(QStringLiteral("border-styles"), borderStyleValues(config.borderStyles));
     return values;
 }
 

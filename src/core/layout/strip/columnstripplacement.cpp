@@ -53,11 +53,15 @@ std::vector<ColumnRef> ColumnStrip::placedColumns(bool animated) const
         return result;
     }
     const std::vector<double> xs = columnOffsets();
-    const double viewOff = animated ? -scrollPosition() : -targetScrollPosition();
+    const double scroll = animated ? scrollPosition() : targetScrollPosition();
+    const double center = viewCenter(scroll);
+    const double period = wrapPeriod();
     const auto push = [&](std::size_t idx) {
         const Column &column = m_columns[idx];
         const QPointF offset = animated ? column.animationOffset() : QPointF();
-        result.push_back({&column, QPointF(viewOff + xs[idx], 0.0) + offset});
+        const double mid = xs[idx] + column.width() / 2.0;
+        const double x = xs[idx] + (nearestPeriodCopy(mid, center, period) - mid);
+        result.push_back({&column, QPointF(x - scroll, 0.0) + offset});
     };
     push(m_activeColumnIndex);
     for (std::size_t i = 0; i < m_columns.size(); ++i) {
@@ -181,6 +185,9 @@ void ColumnStrip::insertTileAfter(WindowId rightOf, Tile tile, bool activate, Co
 std::size_t ColumnStrip::allowedColumnIndex(
     std::optional<Config::ColumnPosition> pin, std::size_t desired, std::optional<std::size_t> excluding) const
 {
+    if (wrapsColumns()) {
+        return std::min(desired, m_columns.size() - (excluding ? 1 : 0));
+    }
     std::size_t count = 0;
     std::size_t leadingStart = 0;
     std::size_t trailingEnd = 0;
@@ -222,7 +229,7 @@ void ColumnStrip::placeColumnWithinPins(std::size_t from)
         ++m_activeColumnIndex;
     }
     m_returnColumnOnClose.reset();
-    m_columns[to].slideXFrom(fromX - columnOffset(to));
+    m_columns[to].slideXFrom(wrappedSlide(to, fromX - columnOffset(to)));
 }
 
 void ColumnStrip::animateColumnsAfter(std::size_t idx, double offset, const Config::AnimationParams &config, bool inclusiveBefore)

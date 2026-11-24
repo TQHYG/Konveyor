@@ -3,7 +3,11 @@
 A native KDE Plasma 6 widget: a clean local-system dashboard — total + per-core
 **CPU** (split into **P-cores / E-cores** on Intel hybrid, each with a group
 total), frequency, package **power** (Intel RAPL) and **temperature**, **RAM** +
-swap, and the **NVIDIA GPU** (usage, VRAM, temp, power, clocks, fan). Styled to
+swap, the **NVIDIA, AMD or Intel GPU** (usage, VRAM, temp, power, clocks,
+fan; on AMD APUs the memory bar counts VRAM plus the system RAM the GPU maps
+through GTT; Intel GPUs on i915 only report usage and the graphics clock (temperature, power, fan and memory clock are null), and their usage is
+the time the GPU is awake, which reads about 10 points high at low load) and
+**network** download/upload, summed over the physical interfaces. Styled to
 match the rest of the suite (Router-Monitor, Log-Monitor, App Portal,
 Process-Mon).
 
@@ -12,7 +16,7 @@ The cards stack in a single vertical column.
 ## How it works
 
 A resident helper (`bin/sysmon-collect`) does all the work, like the other
-collectors: a systemd `--user` service samples `/proc`, `/sys` and `nvidia-smi`
+collectors: a systemd `--user` service samples `/proc`, `/sys` and NVML
 once per interval and writes a JSON snapshot to
 `$XDG_RUNTIME_DIR/Linux-System-Monitor/data.json`. It's **pinned to the E-cores**
 (`bin/sysmon-ecores`) with `Nice=19`, and the widget reads the snapshot
@@ -50,13 +54,17 @@ Click it for the full dashboard:
   per core
 - **GPU**: the same graph tabs, VRAM, memory clock, power limit and max clock
 - **Memory**: RAM and swap with a history graph
-- **Search** filters the dashboard — try `temp`, `power`, `e-core`, `vram` or
-  `swap`
+- **Network**: download and upload graphs over the wired and wireless
+  interfaces (VPN tunnels, bridges and container links are left out, since
+  their traffic also crosses one of those)
+- **Search** filters the dashboard — try `temp`, `power`, `e-core`, `vram`,
+  `swap` or `upload`
 - Cards fold away with the arrow in their corner and stay folded
 
 Everything in the popup is only built while it's open, so a closed popup costs
 nothing beyond the panel button.
 
 Settings (right-click → Configure): panel icon, refresh interval, accent colour,
-history graphs, per-core bars, GPU section. Collector sampling rate is
+history graphs, per-core bars, GPU and network sections, and a download/upload
+chip on the panel button (off by default). Collector sampling rate is
 `poll_interval` in `~/.config/Linux-System-Monitor/config.json`.

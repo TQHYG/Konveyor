@@ -189,6 +189,14 @@ double scrollToReveal(double curX, double viewWidth, double newColX, double newC
     return -(viewWidth - padding - newColWidth);
 }
 
+double nearestPeriodCopy(double x, double reference, double period)
+{
+    if (period <= 0.0) {
+        return x;
+    }
+    return x + std::floor((reference - x) / period + 0.5) * period;
+}
+
 int clampToSizeLimits(int x, int minSize, int maxSize)
 {
     if (maxSize > 0) {
@@ -286,19 +294,6 @@ PresetExtent measureFloatingPreset(const Config::PresetSize &preset, double view
         return {true, viewSize * proportion->value};
     }
     return {false, std::round(std::get<Config::Fixed>(preset).value)};
-}
-
-double borderExtent(const Config::Border &border)
-{
-    return border.enabled ? border.width * 2.0 : 0.0;
-}
-
-QSize maxWindowBounds(const Config::Border &border, QSizeF workingAreaSize, QSizeF reservedSize, double gaps)
-{
-    const double extent = borderExtent(border);
-    const double w = std::max(workingAreaSize.width() - gaps * 2.0 - reservedSize.width() - extent, 1.0);
-    const double h = std::max(workingAreaSize.height() - gaps * 2.0 - reservedSize.height() - extent, 1.0);
-    return {floorToInt(w), floorToInt(h)};
 }
 
 }

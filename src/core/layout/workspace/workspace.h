@@ -67,17 +67,14 @@ public:
     void markHomeUnplugged() { m_homeUnplugged = true; }
     void makeHome(const OutputArea &area);
     void setConfiguredHome(const QString &reference);
-    const QString &outputName() const { return m_area.outputName; }
-    bool hasOutput() const { return !m_area.outputName.isEmpty(); }
     const OutputArea &area() const { return m_area; }
     void setOutput(const OutputArea &area);
-    void clearWindowedFullscreenFallbacks();
+    void clearLockedOutputCovers();
     void clearOutput();
 
     void updateConfig(OptionsPtr globalOptions);
     const OptionsPtr &options() const { return m_options; }
     void setLayoutOverride(std::optional<Config::LayoutPart> layoutOverride);
-    const Anim::Clock &clock() const { return m_clock; }
 
     void tickAnimations();
     bool isAnimating() const;
@@ -114,8 +111,8 @@ public:
         bool isFloating, const EffectiveWindowRules &rules, QSize minSize, QSize maxSize) const;
     ColumnWidth tiledWidthFor(const LayoutWindow &window, const std::optional<Config::PresetSize> &width) const;
 
-    bool focusLeft();
-    bool focusRight();
+    bool focusLeft(bool wrap);
+    bool focusRight(bool wrap);
     void focusColumnFirst();
     void focusColumnLast();
     void focusColumnRightOrFirst();
@@ -193,9 +190,10 @@ public:
     void endResize(std::optional<WindowId> window);
 
     void refresh(bool isActive);
-    QString checkConsistency() const;
 
 private:
+    friend struct ConsistencyCheck;
+
     enum class FloatingFocus
     {
         No,

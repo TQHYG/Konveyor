@@ -14,12 +14,6 @@ const QStringList &tabPositions()
     return positions;
 }
 
-void addToggleHandlers(NodeTable &table, bool &on, bool &off)
-{
-    table.insert(QStringLiteral("on"), [&on](const Kdl::Node &node) { on = flagArgument(node); });
-    table.insert(QStringLiteral("off"), [&off](const Kdl::Node &node) { off = flagArgument(node); });
-}
-
 void addPaintHandlers(NodeTable &table, const QString &colorName, const QString &gradientName, std::optional<Paint> &paint)
 {
     table.insert(colorName, [&paint](const Kdl::Node &node) { applyPaintColor(paint, decodePaintNode(node)); });
@@ -50,6 +44,9 @@ BorderRule decodeBorderRule(const Kdl::Node &node)
     addToggleHandlers(table, on, off);
     addTripletHandlers(table, rule.active, rule.inactive, rule.urgent);
     table.insert(QStringLiteral("width"), [&rule](const Kdl::Node &child) { rule.width = numberArgument(child, Range {0, 65535}); });
+    table.insert(QStringLiteral("active-style"), [&rule](const Kdl::Node &child) { rule.activeStyle = stringArgument(child); });
+    table.insert(QStringLiteral("inactive-style"), [&rule](const Kdl::Node &child) { rule.inactiveStyle = stringArgument(child); });
+    table.insert(QStringLiteral("urgent-style"), [&rule](const Kdl::Node &child) { rule.urgentStyle = stringArgument(child); });
     decodeChildren(node, table);
     rule.enabled = decodeToggle(node, on, off);
     return rule;

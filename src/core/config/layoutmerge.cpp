@@ -48,7 +48,7 @@ void mergeTabIndicator(TabIndicator &base, const TabIndicatorPart &part)
         base.cornerRadius = *part.cornerRadius;
     }
     mergeOptionalPaint(base.active, part.colors.active);
-    mergeOptionalPaint(base.inactive, part.colors.inactive);
+    mergePaint(base.inactive, part.colors.inactive);
     mergeOptionalPaint(base.urgent, part.colors.urgent);
 }
 
@@ -81,6 +81,9 @@ void mergeLayoutWorkspaces(Layout &base, const LayoutPart &part)
     if (part.horizontalDesktops) {
         base.horizontalDesktops = *part.horizontalDesktops;
     }
+    if (part.wrapWorkspaces) {
+        base.wrapWorkspaces = *part.wrapWorkspaces;
+    }
     if (part.emptyWorkspaceAboveFirst) {
         base.emptyWorkspaceAboveFirst = *part.emptyWorkspaceAboveFirst;
     }
@@ -101,6 +104,9 @@ void mergeLayoutSizing(Layout &base, const LayoutPart &part)
     }
     if (part.alwaysCenterSingleColumn) {
         base.alwaysCenterSingleColumn = *part.alwaysCenterSingleColumn;
+    }
+    if (part.wrapColumns) {
+        base.wrapColumns = *part.wrapColumns;
     }
     if (part.alwaysExpandSingleColumn) {
         base.alwaysExpandSingleColumn = *part.alwaysExpandSingleColumn;
@@ -145,6 +151,9 @@ Layout mergedLayout(Layout base, const LayoutPart &part)
     if (part.border) {
         mergeBorder(base.border, *part.border);
     }
+    if (part.eventEffects) {
+        mergeEventEffects(base.eventEffects, *part.eventEffects);
+    }
     if (part.tabIndicator) {
         mergeTabIndicator(base.tabIndicator, *part.tabIndicator);
     }
@@ -171,6 +180,7 @@ void mergeBorder(Border &base, const BorderRule &part)
     mergePaint(base.active, part.active);
     mergePaint(base.inactive, part.inactive);
     mergePaint(base.urgent, part.urgent);
+    mergeStyleNames(base, part);
 }
 
 }

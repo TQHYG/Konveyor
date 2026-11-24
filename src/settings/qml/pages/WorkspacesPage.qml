@@ -79,6 +79,16 @@ SettingsPage {
         }
 
         SwitchRow {
+            enabled: page.fixedCount > 0
+            label: "Wrap around at the first and last workspace"
+            description: "With a fixed number of workspaces, going down from the last one lands on the first, and going up from the first lands on the last. Moving a window or column to the workspace below or above wraps too."
+            iconName: "view-refresh"
+            resetPaths: ["layout/wrap-workspaces"]
+            isOn: page.layoutValues["wrap-workspaces"] === true
+            onSwitched: on => SettingsStore.setFlag("layout/wrap-workspaces", on)
+        }
+
+        SwitchRow {
             enabled: page.fixedCount === 0
             label: "Keep an empty workspace above the first"
             description: "There's always a blank workspace at the top to start something new, as well as at the bottom."
@@ -124,18 +134,17 @@ SettingsPage {
     }
 
     Repeater {
-        model: page.named
+        model: page.named.length
 
         ColumnLayout {
             id: slot
-            required property var modelData
             required property int index
             Layout.fillWidth: true
             Layout.bottomMargin: Kirigami.Units.largeSpacing * 2
             spacing: 0
 
             NamedWorkspaceCard {
-                entry: slot.modelData
+                entry: page.named[slot.index] || ({ node: {}, path: "" })
                 index: slot.index
                 count: page.named.length
                 onRenameRequested: (path, name) => {

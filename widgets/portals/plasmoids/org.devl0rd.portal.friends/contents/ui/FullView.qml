@@ -150,6 +150,10 @@ Item {
                     boundsBehavior: Flickable.StopAtBounds
                     QQC2.ScrollBar.vertical: QQC2.ScrollBar {}
 
+                    Kirigami.WheelHandler {
+                        target: listView
+                    }
+
                     section.property: "section"
                     section.criteria: ViewSection.FullString
                     section.delegate: RowLayout {
