@@ -144,6 +144,69 @@ REGEX_PREV_KEYWORDS = {
     "instanceof", "do", "else", "yield", "await", "throw",
 }
 
+ESCAPE_MAP = {
+    "n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f",
+    "v": "\v", "0": "\0", "\\": "\\", "\"": "\"", "'": "'", "`": "`", "/": "/",
+}
+
+
+def unescape_literal(raw: str) -> str:
+    """Turn the characters between quotes into the text they display as."""
+    out = []
+    i = 0
+    while i < len(raw):
+        char = raw[i]
+        if char != "\\" or i + 1 >= len(raw):
+            out.append(char)
+            i += 1
+            continue
+        nxt = raw[i + 1]
+        if nxt in ESCAPE_MAP:
+            out.append(ESCAPE_MAP[nxt])
+            i += 2
+            continue
+        if nxt == "u" and i + 5 < len(raw):
+            try:
+                out.append(chr(int(raw[i + 2:i + 6], 16)))
+                i += 6
+                continue
+            except ValueError:
+                pass
+        if nxt == "x" and i + 3 < len(raw):
+            try:
+                out.append(chr(int(raw[i + 2:i + 4], 16)))
+                i += 4
+                continue
+            except ValueError:
+                pass
+        # Unknown escape (e.g. \.): JavaScript drops the backslash.
+        out.append(nxt)
+        i += 2
+    return "".join(out)
+
+
+def escape_literal(value: str, quote: str) -> str:
+    """Escaping used when writing a display string back into source."""
+    out = []
+    for char in value:
+        if char == "\\":
+            out.append("\\\\")
+        elif char == "\n":
+            out.append("\\n")
+        elif char == "\t":
+            out.append("\\t")
+        elif char == "\r":
+            out.append("\\r")
+        elif char == "\b":
+            out.append("\\b")
+        elif char == "\f":
+            out.append("\\f")
+        elif char == quote:
+            out.append("\\" + char)
+        else:
+            out.append(char)
+    return "".join(out)
+
 
 def tokenize(text: str):
     """Yield ``(kind, value, start, end)`` with comments/whitespace removed."""
@@ -207,7 +270,7 @@ def tokenize(text: str):
                 if text[j] == quote:
                     break
                 j += 1
-            token = ("str", text[i + 1:j] if j < n else text[i + 1:], i, min(j + 1, n))
+            token = ("str", unescape_literal(text[i + 1:j] if j < n else text[i + 1:]), i, min(j + 1, n))
             yield token
             prev_sig = ("str", token[1])
             i = j + 1
@@ -344,12 +407,9 @@ def string_role(tokens, idx, kind, relpath):
 # ---------------------------------------------------------------------------
 
 def quote_literal(text: str, start: int, value: str) -> str:
-    """Wrap ``value`` in the same quote the source used, escaping it."""
+    """Wrap a display string in the same quote the source used, escaping it."""
     quote = text[start] if start < len(text) and text[start] in "\"'`" else '"'
-    value = value.replace("\\", "\\\\")
-    if quote != "`":
-        value = value.replace(quote, "\\" + quote)
-    return quote + value + quote
+    return quote + escape_literal(value, quote) + quote
 
 
 def translate_text(text: str, table: dict, kind: str, relpath: str):
