@@ -19,6 +19,7 @@
 #include <QScopedValueRollback>
 
 #include <algorithm>
+#include <tuple>
 #include <utility>
 
 namespace Konveyor
@@ -86,14 +87,14 @@ constexpr KWin::XdgToplevelInterface::States TiledEdges {KWin::XdgToplevelInterf
     | KWin::XdgToplevelInterface::State::TiledRight | KWin::XdgToplevelInterface::State::TiledTop
     | KWin::XdgToplevelInterface::State::TiledBottom};
 
-void setStrictSize(KWin::Window *window, bool strict)
+void setTiledEdges(KWin::Window *window, bool tiled)
 {
     KWin::XdgToplevelWindow *toplevel = KWin::waylandServer()->findXdgToplevelWindow(window->surface());
     if (!toplevel) {
         return;
     }
     KWin::XdgToplevelInterface::States &states = toplevel->*nextStates();
-    const KWin::XdgToplevelInterface::States wanted = strict ? (states | TiledEdges) : (states & ~TiledEdges);
+    const KWin::XdgToplevelInterface::States wanted = tiled ? (states | TiledEdges) : (states & ~TiledEdges);
     if (wanted != states) {
         states = wanted;
         (toplevel->*configureScheduler())();
@@ -111,6 +112,11 @@ WindowApplier::~WindowApplier()
     for (const QPointer<KWin::Window> &window : std::as_const(m_parked)) {
         if (window) {
             setExemptFromConfinement(window, false);
+        }
+    }
+    for (const QPointer<KWin::Window> &window : std::as_const(m_tiledStates)) {
+        if (window) {
+            setTiledEdges(window, false);
         }
     }
 }
@@ -141,7 +147,7 @@ void WindowApplier::apply(const QList<Layout::WindowState> &states)
             }
         }
         applySizingMode(window, state);
-        setStrictSize(window, keepsStrictSize(window, state, frame));
+        setTiledState(state.id, window, keepsTiledState(window, state, frame));
         applyGeometry(window, frame, requestedSize, !state.isFloating,
             state.isForceResizable || window->isResizable() || m_strictUntilSettled.contains(state.id),
             state.requestedSizingMode == Layout::WindowMode::Fullscreen);
@@ -150,21 +156,30 @@ void WindowApplier::apply(const QList<Layout::WindowState> &states)
     applyStacking(states);
 }
 
-bool WindowApplier::keepsStrictSize(KWin::Window *window, const Layout::WindowState &state, const QRectF &frame)
+bool WindowApplier::keepsTiledState(KWin::Window *window, const Layout::WindowState &state, const QRectF &frame)
 {
     const bool tiled = !state.isFloating && state.requestedSizingMode != Layout::WindowMode::Fullscreen && !window->isRequestedFullScreen();
     if (tiled && state.isForceResizable && !window->isResizable()) {
         m_strictUntilSettled.insert(state.id);
         return true;
     }
-    if (!m_strictUntilSettled.contains(state.id)) {
-        return false;
-    }
-    if (!tiled || isSameSize(window->frameGeometry().size(), frame.size())) {
+    if (m_strictUntilSettled.contains(state.id)) {
+        if (tiled && !isSameSize(window->frameGeometry().size(), frame.size())) {
+            return true;
+        }
         m_strictUntilSettled.remove(state.id);
-        return false;
     }
-    return true;
+    return tiled && window->isResizable();
+}
+
+void WindowApplier::setTiledState(Layout::WindowId id, KWin::Window *window, bool tiled)
+{
+    if (tiled) {
+        m_tiledStates.insert(id, window);
+    } else {
+        m_tiledStates.remove(id);
+    }
+    setTiledEdges(window, tiled);
 }
 
 bool WindowApplier::consumeInFlightSize(Layout::WindowId id, const QSizeF &size)
@@ -225,6 +240,9 @@ void WindowApplier::forget(Layout::WindowId id)
     m_loggedTargets.remove(id);
     if (const QPointer<KWin::Window> window = m_parked.take(id)) {
         setExemptFromConfinement(window, false);
+    }
+    if (const QPointer<KWin::Window> window = m_tiledStates.take(id)) {
+        setTiledEdges(window, false);
     }
 }
 
@@ -345,25 +363,36 @@ void WindowApplier::applySizingMode(KWin::Window *window, const Layout::WindowSt
     }
 }
 
+void WindowApplier::restack(const QList<Layout::WindowState> &states)
+{
+    const QScopedValueRollback guard(m_applying, true);
+    applyStacking(states);
+}
+
 void WindowApplier::applyStacking(const QList<Layout::WindowState> &states)
 {
     QList<const Layout::WindowState *> ordered;
     for (const Layout::WindowState &state : states) {
         ordered.append(&state);
     }
-    std::ranges::stable_sort(ordered, {}, &Layout::WindowState::stackingIndex);
+    std::ranges::stable_sort(ordered, [](const Layout::WindowState *a, const Layout::WindowState *b) {
+        return std::tie(a->output, a->workspace, a->stackingIndex) < std::tie(b->output, b->workspace, b->stackingIndex);
+    });
     qsizetype lowerGroupTop = -1;
     qsizetype currentGroupTop = -1;
-    std::optional<int> currentIndex;
+    const Layout::WindowState *previous = nullptr;
     for (const Layout::WindowState *state : ordered) {
         KWin::Window *window = m_windows.windowOf(state->id);
         if (!window) {
             continue;
         }
-        if (currentIndex != state->stackingIndex) {
+        if (!previous || previous->output != state->output || previous->workspace != state->workspace) {
+            lowerGroupTop = -1;
+            currentGroupTop = -1;
+        } else if (previous->stackingIndex != state->stackingIndex) {
             lowerGroupTop = std::max(lowerGroupTop, currentGroupTop);
-            currentIndex = state->stackingIndex;
         }
+        previous = state;
         if (KWin::workspace()->stackingOrder().indexOf(window) < lowerGroupTop) {
             KWin::workspace()->raiseWindow(window);
         }

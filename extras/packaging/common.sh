@@ -30,6 +30,7 @@ KONVEYOR_STATE_DIR="$KONVEYOR_PREFIX/share/konveyor"
 KONVEYOR_BUILT_FOR="$KONVEYOR_STATE_DIR/built-for"
 KONVEYOR_BUILD_FAILED="$KONVEYOR_STATE_DIR/build-failed"
 KONVEYOR_REBUILD_LOCK="$KONVEYOR_STATE_DIR/rebuild.lock"
+KONVEYOR_REBUILD_LOG="$KONVEYOR_STATE_DIR/rebuild.log"
 KONVEYOR_PULLED_IMAGES="$KONVEYOR_STATE_DIR/pulled-images"
 KONVEYOR_PLUGIN_DIR=""
 KONVEYOR_SESSION_ENV="${XDG_CONFIG_HOME:-$HOME/.config}/environment.d/konveyor.conf"
@@ -37,6 +38,10 @@ KONVEYOR_UPDATE_UNIT="konveyor-update.service"
 KONVEYOR_GIT_ENV=(GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=15")
 KONVEYOR_CONFLICTING_SCRIPTS=(karousel krohnkite kzones polonium bismuth devl0rd-hide-desktop-widgets)
 KONVEYOR_DISABLED_SCRIPTS="$HOME/.local/state/konveyor/disabled-scripts"
+
+widgets_installed() {
+    [[ -L $HOME/.local/bin/sysmon-collect ]]
+}
 
 say() {
     printf '\033[1;34m==>\033[0m %s\n' "$*"
@@ -127,8 +132,25 @@ owner_session_running() {
 }
 
 notify_owner() {
-    as_owner gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
-        --method org.freedesktop.Notifications.Notify Konveyor 0 system-software-update "$1" "$2" '[]' '{}' 10000 >/dev/null 2>&1 || true
+    local icon=system-software-update hints='{}' timeout=10000 error
+    if [[ ${3:-} == critical ]]; then
+        icon=dialog-error hints="{'urgency': <byte 2>}" timeout=0
+    fi
+    if ! error=$(as_owner gdbus call --session --dest org.freedesktop.Notifications --object-path /org/freedesktop/Notifications \
+        --method org.freedesktop.Notifications.Notify Konveyor 0 "$icon" "$1" "$2" '[]' "$hints" "$timeout" 2>&1 >/dev/null); then
+        printf 'konveyor: could not send the "%s" desktop notification: %s\n' "$1" "$error" >&2
+    fi
+    return 0
+}
+
+notify_build_failed() {
+    notify_owner "Konveyor rebuild failed" \
+        "The automatic rebuild after a system update failed, so Konveyor may be broken. Read the log in $KONVEYOR_REBUILD_LOG, then run ./install.sh in $1 to retry." critical
+}
+
+notify_build_skipped() {
+    notify_owner "Konveyor rebuild skipped" \
+        "The last automatic rebuild failed for the current system and sources, so it was not tried again and Konveyor may be broken. Read the log in $KONVEYOR_REBUILD_LOG, then run ./install.sh in $1 to retry." critical
 }
 
 kwin_dbus() {
